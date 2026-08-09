@@ -8,9 +8,10 @@ import yaml
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 
 from contra_rl.envs.wrappers import make_training_env
+from contra_rl.training.callbacks import ContraMetricsCallback
 
 ALGORITHMS = {
     "PPO": PPO,
@@ -59,6 +60,7 @@ def apply_training_overrides(
     n_envs: int | None = None,
     run_name: str | None = None,
     device: str | None = None,
+    metrics_log_freq: int | None = None,
 ) -> dict[str, Any]:
     """Return a config copy with CLI overrides applied."""
     updated = deepcopy(config)
@@ -74,6 +76,8 @@ def apply_training_overrides(
         updated["logging"]["run_name"] = run_name
     if device is not None:
         updated["device"] = device
+    if metrics_log_freq is not None:
+        updated["logging"]["metrics_log_freq"] = metrics_log_freq
 
     return updated
 
@@ -89,8 +93,10 @@ def make_vector_env(
 
     def make_one_env(rank: int):
         def _init():
+            integration_path = env_config.get("stable_retro_integration_path")
             env = make_training_env(
                 rom_path,
+                backend=env_config.get("backend", "nes-py"),
                 action_set=env_config.get("action_set", "SIMPLE_MOVEMENT"),
                 frame_skip=int(env_config.get("frame_skip", 4)),
                 screen_size=int(env_config.get("screen_size", 84)),
@@ -98,6 +104,13 @@ def make_vector_env(
                 frame_stack=int(env_config.get("frame_stack", 4)),
                 max_episode_steps=int(env_config.get("max_episode_steps", 18_000)),
                 stuck_timeout_steps=int(env_config.get("stuck_timeout_steps", 900)),
+                stable_retro_game=env_config.get("stable_retro_game", "Contra-Nes"),
+                stable_retro_state=env_config.get("stable_retro_state", "Level1"),
+                stable_retro_scenario=env_config.get("stable_retro_scenario"),
+                stable_retro_info=env_config.get("stable_retro_info"),
+                stable_retro_integration_path=Path(integration_path)
+                if integration_path
+                else None,
             )
             env.reset(seed=seed + rank)
             return env
@@ -105,7 +118,12 @@ def make_vector_env(
         return _init
 
     set_random_seed(seed)
-    env = DummyVecEnv([make_one_env(rank) for rank in range(n_envs)])
+    env_fns = [make_one_env(rank) for rank in range(n_envs)]
+    if env_config.get("backend", "nes-py") == "stable-retro" and n_envs > 1:
+        start_method = env_config.get("vec_env_start_method", "forkserver")
+        env = SubprocVecEnv(env_fns, start_method=start_method)
+    else:
+        env = DummyVecEnv(env_fns)
     return VecMonitor(env)
 
 
@@ -152,6 +170,7 @@ def train_model(
     n_envs = int(env_config.get("n_envs", 1))
     total_timesteps = int(training_config.get("total_timesteps", 100_000))
     run_name = str(logging_config.get("run_name", "contra_run"))
+    metrics_log_freq = int(logging_config.get("metrics_log_freq", 1_000))
 
     run_dir = run_root / run_name
     checkpoint_dir = run_dir / "checkpoints"
@@ -169,6 +188,8 @@ def train_model(
         model = build_model(config, env, tensorboard_dir=tensorboard_dir)
         checkpoint_freq = int(logging_config.get("checkpoint_freq", 100_000))
         callbacks = []
+        if metrics_log_freq > 0:
+            callbacks.append(ContraMetricsCallback(log_freq=metrics_log_freq))
         if checkpoint_freq > 0:
             callbacks.append(
                 CheckpointCallback(

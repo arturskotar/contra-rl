@@ -1,0 +1,17 @@
+{
+  "done": {
+    "condition": "any",
+    "variables": {
+      "death_flag": {
+        "op": "nonzero"
+      },
+      "dying_state": {
+        "op": "equal",
+        "reference": 12
+      }
+    }
+  },
+  "reward": {
+    "variables": {}
+  }
+}

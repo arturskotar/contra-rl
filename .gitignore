@@ -4,6 +4,7 @@ __pycache__/
 *.pyd
 .Python
 .venv/
+.venv*/
 venv/
 env/
 .pytest_cache/
@@ -19,6 +20,7 @@ pytest-cache-files-*/
 build/
 dist/
 *.egg-info/
+.tmp_packages/
 
 # RL artifacts
 runs/*
@@ -32,6 +34,11 @@ states/*
 # ROMs: never commit game ROMs
 roms/*
 !roms/.gitkeep
+
+# Stable Retro local/generated artifacts
+integrations/**/*.state
+integrations/**/rom.*
+!integrations/**/rom.sha
 
 # OS / IDE
 .DS_Store

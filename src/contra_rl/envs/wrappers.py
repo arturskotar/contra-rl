@@ -9,6 +9,7 @@ import numpy as np
 from gymnasium import spaces
 
 from contra_rl.envs.contra_env import make_contra_env
+from contra_rl.envs.stable_retro_env import make_stable_retro_contra_env
 
 
 class FrameSkip(gym.Wrapper):
@@ -132,6 +133,7 @@ class ChannelFirstFrameStack(gym.Wrapper):
 def make_training_env(
     rom_path: Path,
     *,
+    backend: str = "nes-py",
     action_set: str = "SIMPLE_MOVEMENT",
     frame_skip: int = 4,
     screen_size: int = 84,
@@ -139,16 +141,57 @@ def make_training_env(
     frame_stack: int = 4,
     max_episode_steps: int = 18_000,
     stuck_timeout_steps: int = 900,
+    stable_retro_game: str = "Contra-Nes",
+    stable_retro_state: str = "Level1",
+    stable_retro_scenario: str | None = None,
+    stable_retro_info: str | None = None,
+    stable_retro_integration_path: Path | None = None,
 ):
     """Create the single-env training wrapper stack."""
-    env = make_contra_env(
-        rom_path,
-        action_set=action_set,
-        render_mode=None,
-        max_episode_steps=max_episode_steps,
-        stuck_timeout_steps=stuck_timeout_steps,
-    )
+    if backend == "nes-py":
+        env = make_contra_env(
+            rom_path,
+            action_set=action_set,
+            render_mode=None,
+            max_episode_steps=max_episode_steps,
+            stuck_timeout_steps=stuck_timeout_steps,
+        )
+    elif backend == "stable-retro":
+        env = make_stable_retro_contra_env(
+            game=stable_retro_game,
+            state=stable_retro_state,
+            scenario=stable_retro_scenario,
+            info=stable_retro_info,
+            integration_path=stable_retro_integration_path,
+            action_set=action_set,
+            render_mode="rgb_array",
+            max_episode_steps=max_episode_steps,
+            stuck_timeout_steps=stuck_timeout_steps,
+        )
+    else:
+        raise ValueError("backend must be one of: nes-py, stable-retro")
     env = FrameSkip(env, skip=frame_skip)
     env = ResizeAndGrayscale(env, size=screen_size, grayscale=grayscale)
     env = ChannelFirstFrameStack(env, stack_size=frame_stack)
     return env
+
+
+def current_rgb_frame(env: gym.Env) -> np.ndarray:
+    """Return the current raw RGB frame from a wrapped Contra environment."""
+    current = env
+    while True:
+        if hasattr(current, "get_rgb_frame"):
+            return np.asarray(current.get_rgb_frame())
+        if not hasattr(current, "env"):
+            break
+        current = current.env
+
+    unwrapped = env.unwrapped
+    if hasattr(unwrapped, "get_rgb_frame"):
+        return np.asarray(unwrapped.get_rgb_frame())
+    if hasattr(unwrapped, "observation"):
+        return np.asarray(unwrapped.observation("rgb_array"))
+    rendered = unwrapped.render()
+    if rendered is None:
+        raise RuntimeError("could not read an RGB frame from the environment")
+    return np.asarray(rendered)

@@ -7,14 +7,13 @@ name = "contra-rl"
 version = "0.1.0"
 description = "Reinforcement learning agent for NES Contra."
 readme = "README.md"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.12,<3.15"
 dependencies = [
   "torch",
   "torchvision",
   "torchaudio",
   "stable-baselines3[extra]>=2.7",
   "gymnasium>=1.1",
-  "nes-py>=9.0",
   "numpy>=2.0",
   "opencv-python>=4.10",
   "pillow>=11.0",
@@ -29,8 +28,14 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.6",
 ]
+nes-py = [
+  "nes-py>=9.0",
+]
 recurrent = [
   "sb3-contrib>=2.7",
+]
+stable-retro = [
+  "stable-retro>=1.0",
 ]
 
 [project.scripts]

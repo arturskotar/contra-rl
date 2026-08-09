@@ -1,0 +1,40 @@
+{
+  "info": {
+    "player_x_low": {
+      "address": 820,
+      "type": "|u1"
+    },
+    "screen_number": {
+      "address": 100,
+      "type": "|u1"
+    },
+    "scroll_offset": {
+      "address": 253,
+      "type": "|u1"
+    },
+    "y_pos": {
+      "address": 794,
+      "type": "|u1"
+    },
+    "lives": {
+      "address": 50,
+      "type": "|u1"
+    },
+    "score_high": {
+      "address": 2018,
+      "type": "|u1"
+    },
+    "score_low": {
+      "address": 2019,
+      "type": "|u1"
+    },
+    "death_flag": {
+      "address": 180,
+      "type": "|u1"
+    },
+    "dying_state": {
+      "address": 214,
+      "type": "|u1"
+    }
+  }
+}

@@ -28,8 +28,17 @@ If the environment is unreliable, the agent will train on bad signals. The first
   ```powershell
   python -m pip install --upgrade pip
   pip install torch torchvision torchaudio
-  pip install -e ".[dev]"
+  pip install -e ".[dev,nes-py]"
   ```
+
+  For the Stable Retro backend, use a separate venv and install:
+
+  ```powershell
+  pip install -e ".[dev,stable-retro]"
+  ```
+
+  Do not install `nes-py` and `stable-retro` in the same venv because their
+  `pyglet` dependency ranges conflict.
 
 - [ ] Verify GPU:
 
@@ -351,4 +360,3 @@ Recommended order:
 10. Evaluation videos guide reward iteration.
 
 Do not start with fancy models. Start with boring environment certainty.
-

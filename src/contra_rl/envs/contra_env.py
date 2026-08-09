@@ -8,8 +8,6 @@ shaping for smoke tests. RAM addresses are still hypotheses until validated.
 from pathlib import Path
 
 import numpy as np
-from nes_py import NESEnv
-from nes_py.wrappers import JoypadSpace
 
 from contra_rl.envs.actions import ACTION_SETS
 from contra_rl.envs.ram import (
@@ -32,6 +30,25 @@ class ContraEnvError(RuntimeError):
     """Raised when the Contra environment cannot be created or run."""
 
 
+try:
+    from nes_py import NESEnv as _NESEnv
+    from nes_py.wrappers import JoypadSpace as _JoypadSpace
+except ImportError as _NES_PY_IMPORT_ERROR:
+    _NESEnv = object
+    _JoypadSpace = None
+else:
+    _NES_PY_IMPORT_ERROR = None
+
+
+def _import_nes_py():
+    if _NES_PY_IMPORT_ERROR is not None or _JoypadSpace is None:
+        raise ContraEnvError(
+            "nes-py is not installed. Install the nes-py backend with "
+            '`pip install -e ".[nes-py]"`, or use a stable-retro config.'
+        ) from _NES_PY_IMPORT_ERROR
+    return _NESEnv, _JoypadSpace
+
+
 def validate_rom_path(rom_path: Path) -> Path:
     """Validate and normalize a ROM path."""
     resolved = rom_path.expanduser().resolve()
@@ -42,7 +59,7 @@ def validate_rom_path(rom_path: Path) -> Path:
     return resolved
 
 
-class ContraNesEnv(NESEnv):
+class ContraNesEnv(_NESEnv):
     """Raw NES Contra environment with deterministic startup handling."""
 
     reward_range = (-100.0, 100.0)
@@ -235,6 +252,10 @@ class ContraNesEnv(NESEnv):
         obs = super().observation(mode=mode, output=output)
         return np.asarray(obs)
 
+    def get_rgb_frame(self) -> np.ndarray:
+        """Return the current emulator frame as an RGB array."""
+        return self.observation("rgb_array")
+
 
 def make_contra_env(
     rom_path: Path,
@@ -255,6 +276,7 @@ def make_contra_env(
     stuck_timeout_steps: int = 900,
 ):
     """Create a Joypad-wrapped Contra environment."""
+    _, joypad_space = _import_nes_py()
     try:
         actions = ACTION_SETS[action_set]
     except KeyError as exc:
@@ -279,4 +301,4 @@ def make_contra_env(
         max_episode_steps=max_episode_steps,
         stuck_timeout_steps=stuck_timeout_steps,
     )
-    return JoypadSpace(env, actions)
+    return joypad_space(env, actions)

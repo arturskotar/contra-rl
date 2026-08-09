@@ -27,5 +27,6 @@ training:
 
 logging:
   run_name: dqn_baseline
+  metrics_log_freq: 1000
   checkpoint_freq: 100000
   eval_freq: 50000

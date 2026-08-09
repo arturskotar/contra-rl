@@ -1,3 +1,5 @@
+import hashlib
+import shutil
 from pathlib import Path
 from time import sleep
 from typing import Annotated
@@ -19,7 +21,9 @@ from contra_rl.envs.contra_env import (
     make_contra_env,
     validate_rom_path,
 )
-from contra_rl.envs.wrappers import make_training_env
+from contra_rl.envs.stable_retro_env import StableRetroUnavailableError, _import_stable_retro
+from contra_rl.envs.wrappers import current_rgb_frame, make_training_env
+from contra_rl.training.evaluate import evaluate_model, load_model
 from contra_rl.training.train import (
     apply_training_overrides,
     load_training_config,
@@ -404,6 +408,98 @@ def watch(
 
 
 @app.command()
+def play(
+    checkpoint: Annotated[Path, typer.Option(help="Path to a trained checkpoint.")],
+    rom: Annotated[Path, typer.Option(help="Path to the local Contra NES ROM.")],
+    config: Annotated[
+        Path,
+        typer.Option(help="Path to the training config used for the checkpoint."),
+    ] = Path("configs/ppo_baseline.yaml"),
+    steps: Annotated[int, typer.Option(min=1, help="Maximum rendered agent steps.")] = 5000,
+    deterministic: Annotated[bool, typer.Option(help="Use deterministic policy actions.")] = True,
+    fps: Annotated[float, typer.Option(min=1.0, max=60.0, help="Playback speed.")] = 60.0,
+    scale: Annotated[int, typer.Option(min=1, max=6, help="Window pixel scale.")] = 3,
+    device: Annotated[
+        str | None,
+        typer.Option(help="Override device: cuda, cpu, or auto."),
+    ] = None,
+) -> None:
+    """Watch a trained agent play in a live OpenCV window."""
+    try:
+        resolved_rom = validate_rom_path(rom)
+        resolved_checkpoint = checkpoint.expanduser().resolve()
+        if not resolved_checkpoint.exists():
+            raise ValueError(f"checkpoint not found: {resolved_checkpoint}")
+
+        resolved_config = config.expanduser().resolve()
+        play_config = load_training_config(resolved_config)
+        algorithm = str(play_config.get("algorithm", "PPO"))
+        env_config = play_config.get("env", {})
+        model_device = device or str(play_config.get("device", "auto"))
+
+        console.print(f"[cyan]ROM:[/cyan] {resolved_rom}")
+        console.print(f"[cyan]Checkpoint:[/cyan] {resolved_checkpoint}")
+        console.print(f"[cyan]Config:[/cyan] {resolved_config}")
+        console.print(f"[cyan]Device:[/cyan] {model_device}")
+        console.print("[cyan]Opening OpenCV render window...[/cyan]")
+        console.print("[dim]Press q or Esc in the render window to stop.[/dim]")
+
+        model = load_model(resolved_checkpoint, algorithm, device=model_device)
+        integration_path = env_config.get("stable_retro_integration_path")
+        env = make_training_env(
+            resolved_rom,
+            backend=env_config.get("backend", "nes-py"),
+            action_set=env_config.get("action_set", "SIMPLE_MOVEMENT"),
+            frame_skip=int(env_config.get("frame_skip", 4)),
+            screen_size=int(env_config.get("screen_size", 84)),
+            grayscale=bool(env_config.get("grayscale", True)),
+            frame_stack=int(env_config.get("frame_stack", 4)),
+            max_episode_steps=int(env_config.get("max_episode_steps", 18_000)),
+            stuck_timeout_steps=int(env_config.get("stuck_timeout_steps", 900)),
+            stable_retro_game=env_config.get("stable_retro_game", "Contra-Nes"),
+            stable_retro_state=env_config.get("stable_retro_state", "Level1"),
+            stable_retro_scenario=env_config.get("stable_retro_scenario"),
+            stable_retro_info=env_config.get("stable_retro_info"),
+            stable_retro_integration_path=Path(integration_path) if integration_path else None,
+        )
+
+        delay_seconds = 1.0 / fps
+        total_reward = 0.0
+        try:
+            obs, info = env.reset(seed=42)
+            keep_running = _show_frame(current_rgb_frame(env), scale)
+
+            for step_index in range(1, steps + 1):
+                if not keep_running:
+                    console.print("[yellow]Stopped by user.[/yellow]")
+                    break
+
+                action, _ = model.predict(obs, deterministic=deterministic)
+                obs, reward, terminated, truncated, info = env.step(int(action))
+                total_reward += float(reward)
+                keep_running = _show_frame(current_rgb_frame(env), scale)
+                sleep(delay_seconds)
+
+                if step_index % 120 == 0 or terminated or truncated:
+                    console.print(
+                        f"step={step_index} reward={total_reward:.3f} "
+                        f"x={info.get('x_pos')} max_x={info.get('max_x_pos')} "
+                        f"lives={info.get('lives')} score={info.get('score')}"
+                    )
+
+                if terminated or truncated:
+                    status = "terminated" if terminated else "truncated"
+                    console.print(f"[yellow]Episode {status}; stopping playback.[/yellow]")
+                    break
+        finally:
+            env.close()
+            cv2.destroyWindow(WATCH_WINDOW_NAME)
+    except (ContraEnvError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+
+@app.command()
 def startup_preview(
     rom: Annotated[Path, typer.Option(help="Path to the local Contra NES ROM.")],
     idle_frames: Annotated[
@@ -654,6 +750,10 @@ def capture_start_state(
 @app.command()
 def check_env(
     rom: Annotated[Path, typer.Option(help="Path to the local Contra NES ROM.")],
+    config: Annotated[
+        Path | None,
+        typer.Option(help="Optional training config YAML to source env settings from."),
+    ] = None,
     action_set: Annotated[str, typer.Option(help="Action set name.")] = "SIMPLE_MOVEMENT",
     frame_skip: Annotated[int, typer.Option(min=1, help="Frame skip/action repeat.")] = 4,
     screen_size: Annotated[int, typer.Option(min=1, help="Processed image size.")] = 84,
@@ -664,16 +764,35 @@ def check_env(
     """Build the training env and run Stable-Baselines3 compatibility checks."""
     try:
         resolved_rom = validate_rom_path(rom)
-        _require_action_set(action_set)
+        env_config = {}
+        resolved_config = None
+        if config is not None:
+            resolved_config = config.expanduser().resolve()
+            env_config = load_training_config(resolved_config).get("env", {})
+
+        selected_action_set = env_config.get("action_set", action_set)
+        integration_path = env_config.get("stable_retro_integration_path")
+        _require_action_set(selected_action_set)
         console.print(f"[cyan]ROM:[/cyan] {resolved_rom}")
+        if resolved_config is not None:
+            console.print(f"[cyan]Config:[/cyan] {resolved_config}")
+        console.print(f"[cyan]Backend:[/cyan] {env_config.get('backend', 'nes-py')}")
         console.print("[cyan]Building training environment...[/cyan]")
         env = make_training_env(
             resolved_rom,
-            action_set=action_set,
-            frame_skip=frame_skip,
-            screen_size=screen_size,
-            grayscale=grayscale,
-            frame_stack=frame_stack,
+            backend=env_config.get("backend", "nes-py"),
+            action_set=selected_action_set,
+            frame_skip=int(env_config.get("frame_skip", frame_skip)),
+            screen_size=int(env_config.get("screen_size", screen_size)),
+            grayscale=bool(env_config.get("grayscale", grayscale)),
+            frame_stack=int(env_config.get("frame_stack", frame_stack)),
+            max_episode_steps=int(env_config.get("max_episode_steps", 18_000)),
+            stuck_timeout_steps=int(env_config.get("stuck_timeout_steps", 900)),
+            stable_retro_game=env_config.get("stable_retro_game", "Contra-Nes"),
+            stable_retro_state=env_config.get("stable_retro_state", "Level1"),
+            stable_retro_scenario=env_config.get("stable_retro_scenario"),
+            stable_retro_info=env_config.get("stable_retro_info"),
+            stable_retro_integration_path=Path(integration_path) if integration_path else None,
         )
         try:
             obs, info = env.reset(seed=42)
@@ -708,6 +827,88 @@ def check_env(
 
 
 @app.command()
+def retro_status(
+    game: Annotated[str, typer.Option(help="Stable Retro game id to check.")] = "Contra-Nes",
+    integration_path: Annotated[
+        Path,
+        typer.Option(help="Custom Stable Retro integrations directory."),
+    ] = Path("integrations"),
+) -> None:
+    """Check Stable Retro install and Contra integration visibility."""
+    try:
+        retro = _import_stable_retro()
+        resolved_integration_path = integration_path.expanduser().resolve()
+        if resolved_integration_path.exists():
+            retro.data.Integrations.add_custom_path(str(resolved_integration_path))
+
+        games = set(retro.data.list_games(inttype=retro.data.Integrations.ALL))
+        console.print("[green]stable-retro import succeeded.[/green]")
+        console.print(f"integration_path={resolved_integration_path}")
+        console.print(f"game={game}")
+        console.print(f"game_visible={game in games}")
+        if game not in games:
+            console.print(
+                "[yellow]Contra integration is not visible yet. Check the integration "
+                "folder name and install/import Stable Retro artifacts.[/yellow]"
+            )
+    except StableRetroUnavailableError as exc:
+        console.print(f"[red]{exc}[/red]")
+        console.print(
+            "[yellow]On Windows, stable-retro may need a Python 3.11 venv or local build "
+            "tools if no wheel is available for Python 3.13.[/yellow]"
+        )
+        raise typer.Exit(code=1) from exc
+
+
+@app.command()
+def retro_import_rom(
+    rom: Annotated[Path, typer.Option(help="Path to the local Contra NES ROM.")],
+    game: Annotated[str, typer.Option(help="Stable Retro game id.")] = "Contra-Nes",
+    integration_path: Annotated[
+        Path,
+        typer.Option(help="Custom Stable Retro integrations directory."),
+    ] = Path("integrations"),
+    force: Annotated[bool, typer.Option(help="Overwrite an existing imported rom.nes.")] = False,
+) -> None:
+    """Import a local NES ROM into this project's custom Stable Retro integration."""
+    resolved_rom = validate_rom_path(rom)
+    game_dir = integration_path.expanduser().resolve() / game
+    sha_path = game_dir / "rom.sha"
+    output_path = game_dir / "rom.nes"
+
+    if not game_dir.exists():
+        raise typer.BadParameter(f"integration folder not found: {game_dir}")
+    if not sha_path.exists():
+        raise typer.BadParameter(f"rom.sha not found: {sha_path}")
+    if output_path.exists() and not force:
+        console.print(f"[yellow]ROM already imported:[/yellow] {output_path}")
+        console.print("Use --force to overwrite it.")
+        return
+
+    rom_bytes = resolved_rom.read_bytes()
+    if len(rom_bytes) <= 16:
+        raise typer.BadParameter("NES ROM is too small to contain an iNES header and body.")
+
+    # Stable Retro hashes .nes files without the 16-byte iNES header.
+    stable_retro_sha = hashlib.sha1(rom_bytes[16:]).hexdigest()
+    expected_hashes = {
+        line.strip().lower()
+        for line in sha_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    if stable_retro_sha not in expected_hashes:
+        expected = ", ".join(sorted(expected_hashes)) or "<empty rom.sha>"
+        raise typer.BadParameter(
+            "ROM hash does not match this integration. "
+            f"stable_retro_sha={stable_retro_sha} expected={expected}"
+        )
+
+    shutil.copyfile(resolved_rom, output_path)
+    console.print(f"[green]Imported ROM:[/green] {output_path}")
+    console.print(f"stable_retro_sha={stable_retro_sha}")
+
+
+@app.command()
 def train(
     config: Annotated[Path, typer.Option(help="Path to a training config YAML file.")],
     rom: Annotated[Path, typer.Option(help="Path to the local Contra NES ROM.")],
@@ -727,6 +928,10 @@ def train(
         str | None,
         typer.Option(help="Override device: cuda, cpu, or auto."),
     ] = None,
+    metrics_log_freq: Annotated[
+        int | None,
+        typer.Option(min=1, help="Override Contra metrics log frequency."),
+    ] = None,
 ) -> None:
     """Train an agent."""
     try:
@@ -739,6 +944,7 @@ def train(
             n_envs=n_envs,
             run_name=run_name,
             device=device,
+            metrics_log_freq=metrics_log_freq,
         )
 
         algorithm = training_config.get("algorithm", "PPO")
@@ -770,13 +976,89 @@ def train(
 def eval(
     checkpoint: Annotated[Path, typer.Option(help="Path to a trained checkpoint.")],
     rom: Annotated[Path, typer.Option(help="Path to the local Contra NES ROM.")],
+    config: Annotated[
+        Path,
+        typer.Option(help="Path to the training config used for the checkpoint."),
+    ] = Path("configs/ppo_baseline.yaml"),
+    episodes: Annotated[int, typer.Option(min=1, help="Evaluation episodes.")] = 1,
+    max_steps: Annotated[int, typer.Option(min=1, help="Max agent steps per episode.")] = 5000,
+    deterministic: Annotated[bool, typer.Option(help="Use deterministic policy actions.")] = True,
     record: Annotated[bool, typer.Option(help="Record an evaluation video.")] = False,
+    video_path: Annotated[
+        Path | None,
+        typer.Option(help="Optional MP4 output path when recording."),
+    ] = None,
+    video_fps: Annotated[
+        float,
+        typer.Option(
+            min=1.0,
+            max=120.0,
+            help="Recorded video FPS. Default matches frame_skip=4 at 60 FPS NES.",
+        ),
+    ] = 15.0,
+    device: Annotated[
+        str | None,
+        typer.Option(help="Override device: cuda, cpu, or auto."),
+    ] = None,
 ) -> None:
     """Evaluate a trained agent."""
-    console.print("[yellow]Evaluation is not implemented yet.[/yellow]")
-    console.print(f"Checkpoint path received: {checkpoint}")
-    console.print(f"ROM path received: {rom}")
-    console.print(f"Record video: {record}")
+    try:
+        resolved_rom = validate_rom_path(rom)
+        resolved_checkpoint = checkpoint.expanduser().resolve()
+        if not resolved_checkpoint.exists():
+            raise ValueError(f"checkpoint not found: {resolved_checkpoint}")
+
+        resolved_config = config.expanduser().resolve()
+        evaluation_config = load_training_config(resolved_config)
+        if device is not None:
+            evaluation_config["device"] = device
+
+        if record and video_path is None:
+            checkpoint_stem = resolved_checkpoint.stem
+            video_path = Path("runs") / "eval_videos" / f"{checkpoint_stem}_eval.mp4"
+        resolved_video_path = video_path.expanduser().resolve() if video_path else None
+
+        console.print(f"[cyan]ROM:[/cyan] {resolved_rom}")
+        console.print(f"[cyan]Checkpoint:[/cyan] {resolved_checkpoint}")
+        console.print(f"[cyan]Config:[/cyan] {resolved_config}")
+        console.print(f"[cyan]Episodes:[/cyan] {episodes}")
+        console.print(f"[cyan]Max steps:[/cyan] {max_steps}")
+        if resolved_video_path is not None:
+            console.print(f"[cyan]Recording:[/cyan] {resolved_video_path}")
+
+        result = evaluate_model(
+            resolved_rom,
+            resolved_checkpoint,
+            evaluation_config,
+            episodes=episodes,
+            max_steps=max_steps,
+            deterministic=deterministic,
+            record_path=resolved_video_path if record else None,
+            video_fps=video_fps,
+            device=device,
+        )
+
+        console.print("[green]Evaluation finished.[/green]")
+        console.print(f"mean_reward={result['mean_reward']:.3f}")
+        console.print(f"mean_max_x_pos={result['mean_max_x_pos']:.1f}")
+        console.print(f"best_max_x_pos={result['best_max_x_pos']:.1f}")
+        for episode in result["episodes"]:
+            console.print(
+                f"episode={episode['episode']} reward={episode['reward']:.3f} "
+                f"steps={episode['steps']} max_x={episode['max_x_pos']:.1f} "
+                f"score={episode['score']} terminated={episode['terminated']} "
+                f"truncated={episode['truncated']}"
+            )
+        if result["record_path"] is not None:
+            console.print(f"video={result['record_path']}")
+            console.print(
+                f"video_frames={result['video_frames']} "
+                f"video_fps={result['video_fps']} "
+                f"duration_seconds={result['video_duration_seconds']:.2f}"
+            )
+    except (ContraEnvError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

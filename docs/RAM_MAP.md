@@ -10,6 +10,20 @@ Confidence levels:
 
 Validation rule: no RAM address should drive important reward logic until it is at least `candidate`, and ideally `validated`.
 
+## Stable Retro built-in Contra variables
+
+Stable Retro's `Contra-Nes` integration exposes these semantic variables in `info`:
+
+| Info key | Address | Type | Meaning | Current use | Confidence |
+|---|---:|---|---|---|---|
+| `level` | `0x0030` | `|u1` | Current level/stage index. | Info/debug. | candidate |
+| `lives` | `0x0032` | `|i1` | Remaining lives. | Life-loss detection, info. | candidate |
+| `player_state` | `0x0146` | `|u1` | Player state; built-in scenario uses `15` for death. | Death detection candidate. | candidate |
+| `score` | `0x07E2` | `<u2` | Score. | Score reward, info. | candidate |
+| `xscroll` | `0x0064` | `>u2` | Horizontal scroll/progress. | Progress reward, stuck detection. | candidate |
+
+For the Stable Retro backend, `xscroll` is the primary progress metric.
+
 ## Current RAM translations
 
 | Name | Address / formula | Type | Meaning | Current use | Confidence | Validation notes |
@@ -100,4 +114,3 @@ Time penalty existed in code, but it was commented out.
 - Avoid writing to RAM unless we know exactly what the address controls.
 - Every reward component should be logged separately in `info["reward_parts"]`.
 - If an address only works for one ROM revision, document the ROM hash before relying on it.
-
