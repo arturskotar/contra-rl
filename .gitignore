@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+pytest-cache-files-*/
+
+# Local secrets / env
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# RL artifacts
+runs/*
+!runs/.gitkeep
+checkpoints/
+videos/
+tensorboard/
+states/*
+!states/.gitkeep
+
+# ROMs: never commit game ROMs
+roms/*
+!roms/.gitkeep
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

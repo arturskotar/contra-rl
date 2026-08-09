@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contra-rl"
+version = "0.1.0"
+description = "Reinforcement learning agent for NES Contra."
+readme = "README.md"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+  "torch",
+  "torchvision",
+  "torchaudio",
+  "stable-baselines3[extra]>=2.7",
+  "gymnasium>=1.1",
+  "nes-py>=9.0",
+  "numpy>=2.0",
+  "opencv-python>=4.10",
+  "pillow>=11.0",
+  "tensorboard>=2.18",
+  "rich>=13.9",
+  "typer>=0.12",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+]
+recurrent = [
+  "sb3-contrib>=2.7",
+]
+
+[project.scripts]
+contra-rl = "contra_rl.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
