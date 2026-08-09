@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import typer
 from rich.console import Console
+from stable_baselines3.common.env_checker import check_env as sb3_check_env
 
 from contra_rl.envs.actions import ACTION_SETS
 from contra_rl.envs.contra_env import (
@@ -17,6 +18,12 @@ from contra_rl.envs.contra_env import (
     ContraNesEnv,
     make_contra_env,
     validate_rom_path,
+)
+from contra_rl.envs.wrappers import make_training_env
+from contra_rl.training.train import (
+    apply_training_overrides,
+    load_training_config,
+    train_model,
 )
 
 app = typer.Typer(help="Train and evaluate Contra RL agents.")
@@ -645,14 +652,118 @@ def capture_start_state(
 
 
 @app.command()
+def check_env(
+    rom: Annotated[Path, typer.Option(help="Path to the local Contra NES ROM.")],
+    action_set: Annotated[str, typer.Option(help="Action set name.")] = "SIMPLE_MOVEMENT",
+    frame_skip: Annotated[int, typer.Option(min=1, help="Frame skip/action repeat.")] = 4,
+    screen_size: Annotated[int, typer.Option(min=1, help="Processed image size.")] = 84,
+    grayscale: Annotated[bool, typer.Option(help="Use grayscale observations.")] = True,
+    frame_stack: Annotated[int, typer.Option(min=1, help="Number of frames to stack.")] = 4,
+    steps: Annotated[int, typer.Option(min=1, help="Random steps after checker.")] = 20,
+) -> None:
+    """Build the training env and run Stable-Baselines3 compatibility checks."""
+    try:
+        resolved_rom = validate_rom_path(rom)
+        _require_action_set(action_set)
+        console.print(f"[cyan]ROM:[/cyan] {resolved_rom}")
+        console.print("[cyan]Building training environment...[/cyan]")
+        env = make_training_env(
+            resolved_rom,
+            action_set=action_set,
+            frame_skip=frame_skip,
+            screen_size=screen_size,
+            grayscale=grayscale,
+            frame_stack=frame_stack,
+        )
+        try:
+            obs, info = env.reset(seed=42)
+            console.print(f"observation_space={env.observation_space}")
+            console.print(f"action_space={env.action_space}")
+            console.print(f"reset obs shape={obs.shape} dtype={obs.dtype}")
+            console.print(f"reset info x={info.get('x_pos')} lives={info.get('lives')}")
+
+            console.print("[cyan]Running SB3 env checker...[/cyan]")
+            sb3_check_env(env, warn=True)
+            console.print("[green]SB3 env checker passed.[/green]")
+
+            total_reward = 0.0
+            rng = np.random.default_rng(42)
+            for step_index in range(1, steps + 1):
+                action = int(rng.integers(env.action_space.n))
+                obs, reward, terminated, truncated, info = env.step(action)
+                total_reward += reward
+                if terminated or truncated:
+                    console.print(f"episode ended during random step {step_index}; resetting")
+                    obs, info = env.reset(seed=42 + step_index)
+
+            console.print(
+                f"[green]Random step smoke passed.[/green] steps={steps} "
+                f"reward={total_reward:.3f} final_obs_shape={obs.shape}"
+            )
+        finally:
+            env.close()
+    except ContraEnvError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+
+@app.command()
 def train(
     config: Annotated[Path, typer.Option(help="Path to a training config YAML file.")],
     rom: Annotated[Path, typer.Option(help="Path to the local Contra NES ROM.")],
+    total_timesteps: Annotated[
+        int | None,
+        typer.Option(min=1, help="Override total training timesteps."),
+    ] = None,
+    n_envs: Annotated[
+        int | None,
+        typer.Option(min=1, help="Override number of parallel environments."),
+    ] = None,
+    run_name: Annotated[
+        str | None,
+        typer.Option(help="Override run name under runs/."),
+    ] = None,
+    device: Annotated[
+        str | None,
+        typer.Option(help="Override device: cuda, cpu, or auto."),
+    ] = None,
 ) -> None:
     """Train an agent."""
-    console.print("[yellow]Training is not implemented yet.[/yellow]")
-    console.print(f"Config path received: {config}")
-    console.print(f"ROM path received: {rom}")
+    try:
+        resolved_rom = validate_rom_path(rom)
+        resolved_config = config.expanduser().resolve()
+        training_config = load_training_config(resolved_config)
+        training_config = apply_training_overrides(
+            training_config,
+            total_timesteps=total_timesteps,
+            n_envs=n_envs,
+            run_name=run_name,
+            device=device,
+        )
+
+        algorithm = training_config.get("algorithm", "PPO")
+        env_config = training_config.get("env", {})
+        train_config = training_config.get("training", {})
+        logging_config = training_config.get("logging", {})
+
+        console.print(f"[cyan]ROM:[/cyan] {resolved_rom}")
+        console.print(f"[cyan]Config:[/cyan] {resolved_config}")
+        console.print(f"[cyan]Algorithm:[/cyan] {algorithm}")
+        console.print(f"[cyan]Run name:[/cyan] {logging_config.get('run_name')}")
+        console.print(f"[cyan]Device:[/cyan] {training_config.get('device')}")
+        console.print(f"[cyan]Parallel envs:[/cyan] {env_config.get('n_envs')}")
+        console.print(f"[cyan]Total timesteps:[/cyan] {train_config.get('total_timesteps')}")
+        console.print("[cyan]Starting training...[/cyan]")
+
+        result = train_model(resolved_rom, training_config)
+        console.print("[green]Training finished.[/green]")
+        console.print(f"run_dir={result['run_dir']}")
+        console.print(f"final_model={result['final_model_path']}")
+        console.print(f"tensorboard={result['tensorboard_dir']}")
+        console.print(f"checkpoints={result['checkpoint_dir']}")
+    except (ContraEnvError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()
