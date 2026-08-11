@@ -77,14 +77,35 @@ class StableRetroContraEnv(gym.Wrapper):
         *,
         max_episode_steps: int = 18_000,
         stuck_timeout_steps: int = 900,
+        progress_reward_scale: float = 0.1,
+        progress_reward_mode: str = "raw",
+        progress_bucket_size: int = 32,
+        progress_reward_per_bucket: float = 0.5,
+        progress_reward_start_x: int = 0,
+        score_reward_scale: float = 0.001,
+        terminate_on_life_loss: bool = True,
+        life_loss_penalty: float = -100.0,
+        game_over_penalty: float = 0.0,
     ) -> None:
         super().__init__(env)
         self.max_episode_steps = max_episode_steps
         self.stuck_timeout_steps = stuck_timeout_steps
+        self.progress_reward_scale = progress_reward_scale
+        self.progress_reward_mode = progress_reward_mode
+        self.progress_bucket_size = progress_bucket_size
+        self.progress_reward_per_bucket = progress_reward_per_bucket
+        self.progress_reward_start_x = progress_reward_start_x
+        self.score_reward_scale = score_reward_scale
+        self.terminate_on_life_loss = terminate_on_life_loss
+        self.life_loss_penalty = life_loss_penalty
+        self.game_over_penalty = game_over_penalty
         self._episode_steps = 0
         self._max_x_position = 0
+        self._max_progress_bucket = 0
         self._previous_score = 0
         self._previous_lives = 0
+        self._has_lives_baseline = False
+        self._last_life_lost = False
         self._steps_since_progress = 0
         self._last_reward_parts = RewardParts()
 
@@ -94,10 +115,13 @@ class StableRetroContraEnv(gym.Wrapper):
         return obs, self._with_contra_info(info)
 
     def step(self, action):
-        obs, _retro_reward, terminated, truncated, info = self.env.step(action)
+        obs, _retro_reward, retro_terminated, truncated, info = self.env.step(action)
         reward = self._get_reward(info)
+        game_over = self._is_game_over(info)
         terminated = bool(
-            terminated or self._is_dead(info) or self._lives(info) < self._previous_lives
+            retro_terminated
+            or game_over
+            or (self.terminate_on_life_loss and self._last_life_lost)
         )
         truncated = bool(
             truncated
@@ -118,8 +142,11 @@ class StableRetroContraEnv(gym.Wrapper):
     def _reset_episode_state(self, info: dict[str, Any]) -> None:
         self._episode_steps = 0
         self._max_x_position = self._x_position(info)
+        self._max_progress_bucket = self._progress_bucket(self._max_x_position)
         self._previous_score = self._score(info)
         self._previous_lives = self._lives(info)
+        self._has_lives_baseline = self._previous_lives > 0
+        self._last_life_lost = False
         self._steps_since_progress = 0
         self._last_reward_parts = RewardParts()
 
@@ -167,36 +194,76 @@ class StableRetroContraEnv(gym.Wrapper):
             or int(info.get("dying_state", 0)) == 12
         )
 
+    def _is_game_over(self, info: dict[str, Any]) -> bool:
+        return self._has_lives_baseline and self._lives(info) <= 0
+
     def _get_reward(self, info: dict[str, Any]) -> float:
         self._episode_steps += 1
 
         x_position = self._x_position(info)
         progress_delta = max(0, x_position - self._max_x_position)
+        score = self._score(info)
+        score_delta = max(0, score - self._previous_score)
+
         if progress_delta > 0:
             self._max_x_position = x_position
+
+        if progress_delta > 0 or score_delta > 0:
             self._steps_since_progress = 0
         else:
             self._steps_since_progress += 1
 
-        score = self._score(info)
-        score_delta = max(0, score - self._previous_score)
         self._previous_score = max(self._previous_score, score)
 
-        death_penalty = (
-            -50.0 if self._is_dead(info) or self._lives(info) < self._previous_lives else 0.0
+        current_lives = self._lives(info)
+        if not self._has_lives_baseline and current_lives > 0:
+            self._previous_lives = current_lives
+            self._has_lives_baseline = True
+
+        self._last_life_lost = (
+            self._has_lives_baseline
+            and current_lives >= 0
+            and current_lives < self._previous_lives
         )
-        self._previous_lives = self._lives(info)
+        game_over = self._is_game_over(info)
+        # Charge each death only once, when the lives counter changes. The dying
+        # animation can span many emulator frames, so checking ``is_dead`` here
+        # would otherwise apply the penalty repeatedly.
+        life_lost_penalty = self.life_loss_penalty if self._last_life_lost else 0.0
+        death_penalty = self.game_over_penalty if self._last_life_lost and game_over else 0.0
+        if self._last_life_lost:
+            # Allow time for the respawn animation without treating it as a
+            # stuck episode. Maximum progress deliberately remains unchanged.
+            self._steps_since_progress = 0
+        self._previous_lives = current_lives
 
         stuck_penalty = -1.0 if self._steps_since_progress >= self.stuck_timeout_steps else 0.0
         parts = RewardParts(
-            progress=progress_delta / 10.0,
-            score=score_delta / 1000.0,
+            progress=self._progress_reward(progress_delta, x_position),
+            score=score_delta * self.score_reward_scale,
             death=death_penalty,
+            life_lost=life_lost_penalty,
             time=-0.001,
             stuck=stuck_penalty,
         )
         self._last_reward_parts = parts
         return parts.total
+
+    def _progress_bucket(self, x_position: int) -> int:
+        if self.progress_bucket_size <= 0:
+            raise ValueError("progress_bucket_size must be > 0")
+        rewardable_x = max(0, x_position - self.progress_reward_start_x)
+        return rewardable_x // self.progress_bucket_size
+
+    def _progress_reward(self, progress_delta: int, x_position: int) -> float:
+        if self.progress_reward_mode == "raw":
+            return progress_delta * self.progress_reward_scale
+        if self.progress_reward_mode == "bucket":
+            current_bucket = self._progress_bucket(x_position)
+            bucket_delta = max(0, current_bucket - self._max_progress_bucket)
+            self._max_progress_bucket = max(self._max_progress_bucket, current_bucket)
+            return bucket_delta * self.progress_reward_per_bucket
+        raise ValueError("progress_reward_mode must be one of: raw, bucket")
 
     def _with_contra_info(self, info: dict[str, Any]) -> dict[str, Any]:
         contra_info = dict(info)
@@ -205,16 +272,21 @@ class StableRetroContraEnv(gym.Wrapper):
                 "x_pos": self._x_position(info),
                 "y_pos": self._y_position(info),
                 "max_x_pos": self._max_x_position,
+                "max_progress_bucket": self._max_progress_bucket,
                 "lives": self._lives(info),
                 "score": self._score(info),
                 "is_dead": self._is_dead(info),
+                "game_over": self._is_game_over(info),
+                "life_lost": self._last_life_lost,
                 "episode_steps": self._episode_steps,
                 "steps_since_progress": self._steps_since_progress,
+                "steps_since_useful_event": self._steps_since_progress,
                 "reward_parts": {
                     "progress": self._last_reward_parts.progress,
                     "score": self._last_reward_parts.score,
                     "weapon": self._last_reward_parts.weapon,
                     "death": self._last_reward_parts.death,
+                    "life_lost": self._last_reward_parts.life_lost,
                     "time": self._last_reward_parts.time,
                     "stuck": self._last_reward_parts.stuck,
                 },
@@ -234,6 +306,15 @@ def make_stable_retro_contra_env(
     render_mode: str | None = "rgb_array",
     max_episode_steps: int = 18_000,
     stuck_timeout_steps: int = 900,
+    progress_reward_scale: float = 0.1,
+    progress_reward_mode: str = "raw",
+    progress_bucket_size: int = 32,
+    progress_reward_per_bucket: float = 0.5,
+    progress_reward_start_x: int = 0,
+    score_reward_scale: float = 0.001,
+    terminate_on_life_loss: bool = True,
+    life_loss_penalty: float = -100.0,
+    game_over_penalty: float = 0.0,
 ):
     """Create a Stable Retro Contra environment from an imported integration."""
     retro = _import_stable_retro()
@@ -258,4 +339,13 @@ def make_stable_retro_contra_env(
         env,
         max_episode_steps=max_episode_steps,
         stuck_timeout_steps=stuck_timeout_steps,
+        progress_reward_scale=progress_reward_scale,
+        progress_reward_mode=progress_reward_mode,
+        progress_bucket_size=progress_bucket_size,
+        progress_reward_per_bucket=progress_reward_per_bucket,
+        progress_reward_start_x=progress_reward_start_x,
+        score_reward_scale=score_reward_scale,
+        terminate_on_life_loss=terminate_on_life_loss,
+        life_loss_penalty=life_loss_penalty,
+        game_over_penalty=game_over_penalty,
     )

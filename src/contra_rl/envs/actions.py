@@ -18,6 +18,66 @@ SIMPLE_MOVEMENT = [
     ["left"],
 ]
 
+CONTRA_BASIC = [
+    ["NOOP"],
+    ["right"],
+    ["right", "B"],
+    ["right", "A"],
+    ["right", "A", "B"],
+    ["B"],
+    ["A"],
+    ["up"],
+    ["up", "B"],
+    ["right", "up"],
+    ["right", "up", "B"],
+    ["down"],
+    ["down", "B"],
+    ["right", "down"],
+    ["right", "down", "B"],
+]
+
+# Every non-contradictory d-pad direction combined with no face button, A, B,
+# or A+B. Start/select are intentionally excluded: training starts from a
+# playable save state, so they are never useful policy actions.
+CONTRA_FULL = [
+    ["NOOP"],
+    ["A"],
+    ["B"],
+    ["A", "B"],
+    ["right"],
+    ["right", "A"],
+    ["right", "B"],
+    ["right", "A", "B"],
+    ["left"],
+    ["left", "A"],
+    ["left", "B"],
+    ["left", "A", "B"],
+    ["up"],
+    ["up", "A"],
+    ["up", "B"],
+    ["up", "A", "B"],
+    ["down"],
+    ["down", "A"],
+    ["down", "B"],
+    ["down", "A", "B"],
+    ["right", "up"],
+    ["right", "up", "A"],
+    ["right", "up", "B"],
+    ["right", "up", "A", "B"],
+    ["right", "down"],
+    ["right", "down", "A"],
+    ["right", "down", "B"],
+    ["right", "down", "A", "B"],
+    ["left", "up"],
+    ["left", "up", "A"],
+    ["left", "up", "B"],
+    ["left", "up", "A", "B"],
+    ["left", "down"],
+    ["left", "down", "A"],
+    ["left", "down", "B"],
+    ["left", "down", "A", "B"],
+]
+
 COMPLEX_MOVEMENT = [
     ["NOOP"],
     ["right"],
@@ -49,5 +109,7 @@ COMPLEX_MOVEMENT = [
 ACTION_SETS = {
     "RIGHT_ONLY": RIGHT_ONLY,
     "SIMPLE_MOVEMENT": SIMPLE_MOVEMENT,
+    "CONTRA_BASIC": CONTRA_BASIC,
+    "CONTRA_FULL": CONTRA_FULL,
     "COMPLEX_MOVEMENT": COMPLEX_MOVEMENT,
 }

@@ -12,11 +12,19 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMoni
 
 from contra_rl.envs.wrappers import make_training_env
 from contra_rl.training.callbacks import ContraMetricsCallback
+from contra_rl.training.policies import ContraCNN
+
+try:
+    from sb3_contrib import RecurrentPPO
+except ImportError:
+    RecurrentPPO = None
 
 ALGORITHMS = {
     "PPO": PPO,
     "DQN": DQN,
 }
+if RecurrentPPO is not None:
+    ALGORITHMS["RECURRENTPPO"] = RecurrentPPO
 
 PPO_KWARGS = {
     "n_steps",
@@ -29,7 +37,10 @@ PPO_KWARGS = {
     "ent_coef",
     "vf_coef",
     "max_grad_norm",
+    "target_kl",
 }
+
+RECURRENT_PPO_KWARGS = PPO_KWARGS
 
 DQN_KWARGS = {
     "learning_rate",
@@ -104,6 +115,17 @@ def make_vector_env(
                 frame_stack=int(env_config.get("frame_stack", 4)),
                 max_episode_steps=int(env_config.get("max_episode_steps", 18_000)),
                 stuck_timeout_steps=int(env_config.get("stuck_timeout_steps", 900)),
+                progress_reward_scale=float(env_config.get("progress_reward_scale", 0.1)),
+                progress_reward_mode=env_config.get("progress_reward_mode", "raw"),
+                progress_bucket_size=int(env_config.get("progress_bucket_size", 32)),
+                progress_reward_per_bucket=float(
+                    env_config.get("progress_reward_per_bucket", 0.5)
+                ),
+                progress_reward_start_x=int(env_config.get("progress_reward_start_x", 0)),
+                score_reward_scale=float(env_config.get("score_reward_scale", 0.001)),
+                terminate_on_life_loss=bool(env_config.get("terminate_on_life_loss", True)),
+                life_loss_penalty=float(env_config.get("life_loss_penalty", -100.0)),
+                game_over_penalty=float(env_config.get("game_over_penalty", 0.0)),
                 stable_retro_game=env_config.get("stable_retro_game", "Contra-Nes"),
                 stable_retro_state=env_config.get("stable_retro_state", "Level1"),
                 stable_retro_scenario=env_config.get("stable_retro_scenario"),
@@ -134,6 +156,11 @@ def build_model(config: dict[str, Any], env, *, tensorboard_dir: Path):
         model_cls = ALGORITHMS[algorithm]
     except KeyError as exc:
         choices = ", ".join(sorted(ALGORITHMS))
+        if algorithm == "RECURRENTPPO" and RecurrentPPO is None:
+            raise ValueError(
+                "RecurrentPPO requires sb3-contrib. Install with "
+                '`pip install -e ".[recurrent]"` or `pip install sb3-contrib`.'
+            ) from exc
         raise ValueError(f"unsupported algorithm '{algorithm}'. Choose one of: {choices}") from exc
 
     policy = config.get("policy", "CnnPolicy")
@@ -141,8 +168,14 @@ def build_model(config: dict[str, Any], env, *, tensorboard_dir: Path):
     seed = int(config.get("seed", 42))
     training_config = config.get("training", {})
 
-    allowed_kwargs = PPO_KWARGS if algorithm == "PPO" else DQN_KWARGS
+    if algorithm == "PPO":
+        allowed_kwargs = PPO_KWARGS
+    elif algorithm == "RECURRENTPPO":
+        allowed_kwargs = RECURRENT_PPO_KWARGS
+    else:
+        allowed_kwargs = DQN_KWARGS
     model_kwargs = {key: training_config[key] for key in allowed_kwargs if key in training_config}
+    policy_kwargs = _resolve_policy_kwargs(config.get("policy_kwargs", {}))
 
     return model_cls(
         policy,
@@ -151,8 +184,26 @@ def build_model(config: dict[str, Any], env, *, tensorboard_dir: Path):
         device=device,
         seed=seed,
         tensorboard_log=str(tensorboard_dir),
+        policy_kwargs=policy_kwargs,
         **model_kwargs,
     )
+
+
+def _resolve_policy_kwargs(raw_policy_kwargs: Any) -> dict[str, Any]:
+    """Translate YAML-friendly policy component names into Python classes."""
+    if raw_policy_kwargs is None:
+        return {}
+    if not isinstance(raw_policy_kwargs, dict):
+        raise ValueError("policy_kwargs must be a mapping")
+
+    policy_kwargs = deepcopy(raw_policy_kwargs)
+    extractor = policy_kwargs.get("features_extractor_class")
+    if extractor is None:
+        return policy_kwargs
+    if extractor == "ContraCNN":
+        policy_kwargs["features_extractor_class"] = ContraCNN
+        return policy_kwargs
+    raise ValueError(f"unknown features_extractor_class '{extractor}'")
 
 
 def train_model(

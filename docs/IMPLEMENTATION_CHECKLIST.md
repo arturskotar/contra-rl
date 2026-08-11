@@ -106,7 +106,8 @@ Recommended progression:
 
 1. `RIGHT_ONLY` for reset/smoke tests.
 2. `SIMPLE_MOVEMENT` for first PPO run.
-3. `COMPLEX_MOVEMENT` only after the simple agent learns forward progress.
+3. `CONTRA_BASIC` for playable Contra training with up/down aiming and ducking.
+4. `COMPLEX_MOVEMENT` only after the basic agent needs richer movement.
 
 ## Phase 4: Start screen / loading screen skip
 

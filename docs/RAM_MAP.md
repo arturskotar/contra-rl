@@ -22,7 +22,9 @@ Stable Retro's `Contra-Nes` integration exposes these semantic variables in `inf
 | `score` | `0x07E2` | `<u2` | Score. | Score reward, info. | candidate |
 | `xscroll` | `0x0064` | `>u2` | Horizontal scroll/progress. | Progress reward, stuck detection. | candidate |
 
-For the Stable Retro backend, `xscroll` is the primary progress metric.
+`xscroll` is an alternate integration fallback. The project custom integration
+normally exposes the three raw coordinate fields below; the wrapper derives
+the validated `x_pos` metric from them.
 
 ## Current RAM translations
 
@@ -31,11 +33,11 @@ For the Stable Retro backend, `xscroll` is the primary progress metric.
 | Player local X | `0x0334` | byte | Player horizontal position within current screen/page. | Part of absolute X. | candidate | Old project used it. New smoke/watch logs show X changes when moving right. |
 | Screen/page number | `0x0064` | byte | Coarse horizontal screen/page index. | Part of absolute X. | hypothesis | Old project used it. Need verify across screen transition. |
 | Horizontal scroll offset | `0x00FD` | byte | Camera/scroll offset. | Part of absolute X. | candidate | Old project used it. New preview logs show it changes during title/menu animation, so must validate during gameplay. |
-| Absolute X | `ram[0x0334] + ram[0x0064] * 255 + ram[0x00FD]` | derived int | Combined horizontal progress estimate. | Progress reward, info metric, stuck detection. | candidate | Good concept from old project. Needs validation at first screen boundary. |
+| Absolute X | `ram[0x0334] + ram[0x0064] * 255 + ram[0x00FD]` | derived int | Combined horizontal progress estimate. | Progress reward, info metric, stuck detection. | validated | Manual Stable Retro play confirmed monotonic forward movement and expected screen progression. |
 | Player Y | `0x031A` | byte | Player vertical position. | Info/debug only. | hypothesis | Old project used it. Needs jump/fall validation. |
 | Lives | `0x0032` | byte | Remaining lives / life-like counter. | Info/debug; possible life-loss detection. | hypothesis | Old project used it. New startup logs showed odd values on title/menu, so only trust during gameplay. |
 | Score info candidate | `read_digits(0x07E0, 2)` | 2-byte digit string | Score-like value exposed by old `_score` property. | Info candidate. | hypothesis | Old project used this for info, but reward used `0x07E2`. Need compare during enemy kills. |
-| Score reward candidate | `read_digits(0x07E2, 2)` | 2-byte digit string | Score-like value used by old reward function. | Score reward candidate. | hypothesis | Need validate by killing first enemy and checking delta. |
+| Score | `read_digits(0x07E2, 2)` | 2-byte digit string | Score value used by the current reward wrapper. | Score reward and info. | validated | Manual Stable Retro play confirmed increases after enemy kills. |
 | Weapon / pickup candidate | `0x00AA` | byte | Old code treated increases as weapon strength / pickup upgrade. | Possible pickup reward. | hypothesis | Need validate across weapon pickup, death, and normal movement. Do not reward yet without logs. |
 | Dying flag candidate | `0x00D6 == 12` | byte flag | Old code treated value `12` as dying animation. | Death termination / death penalty candidate. | hypothesis | Need validate by intentionally dying. |
 | Dead flag candidate | `0x00B4 != 0` | byte flag | Old code treated nonzero as dead. | Death termination / death penalty candidate. | hypothesis | Need validate by intentionally dying. |
@@ -68,12 +70,25 @@ Time penalty existed in code, but it was commented out.
 
 | Reward component | Source | Formula | Status |
 |---|---|---|---|
-| Progress | Absolute X | `max(0, x - max_x_seen) * progress_scale` | Use now, but validate screen transition. |
-| Score | Score reward candidate | `max(0, score - previous_score) * score_scale` | Add only after score RAM validation. |
-| Death | Dying/dead/lives candidates | `-50` on life loss/death | Add after death validation. |
-| Stuck | Absolute X | penalty + truncation after no new max X for N steps | Use after X validation. |
+| Progress | Absolute X | Stable Retro config uses bucketed progress: `+0.5` per new 32-pixel bucket after `x >= 128`. | Use now; avoids dense reward on the safe opening runway. |
+| Score | Score reward candidate | `max(0, score - previous_score) * score_scale`; Stable Retro config uses `0.01`. | Use now; tune against progress reward. |
+| Death | Dying/dead/lives candidates | `-100` on death-state detection | Add after death validation. |
+| Life loss | Lives delta | `-100` and terminate episode when lives decrease | Use for one-life training. |
+| Stuck | Absolute X + score | penalty + truncation after no new max X and no score gain for N steps | Use now; allows combat pauses when score improves. |
 | Time pressure | Step counter | small fixed negative per env step | Safe. |
 | Weapon/pickup | `0x00AA` candidate | positive reward on reliable upgrade increase | Later only. |
+
+## Current action-set direction
+
+`SIMPLE_MOVEMENT` plateaued because Contra needs ducking and vertical aiming.
+The Stable Retro PPO baseline now uses `CONTRA_BASIC`, a 15-action set with:
+
+- forward movement
+- jump
+- shoot
+- up / up-shoot
+- down / down-shoot
+- right+up and right+down aiming variants
 
 ## Validation checklist
 

@@ -130,6 +130,40 @@ class ChannelFirstFrameStack(gym.Wrapper):
         return np.concatenate(channel_first_frames, axis=0).astype(np.uint8, copy=False)
 
 
+def action_meanings(env: gym.Env) -> list[str]:
+    """Return readable action labels from a wrapped action environment."""
+    current = env
+    while True:
+        if hasattr(current, "get_action_meanings"):
+            return list(current.get_action_meanings())
+        if not hasattr(current, "env"):
+            break
+        current = current.env
+
+    if hasattr(env.unwrapped, "get_action_meanings"):
+        return list(env.unwrapped.get_action_meanings())
+    return [str(index) for index in range(env.action_space.n)]
+
+
+class ActionInfoWrapper(gym.Wrapper):
+    """Attach the selected discrete action index/name to each info dict."""
+
+    def __init__(self, env: gym.Env) -> None:
+        super().__init__(env)
+        self.action_meanings = action_meanings(env)
+
+    def step(self, action):
+        observation, reward, terminated, truncated, info = self.env.step(action)
+        action_index = int(action)
+        info = dict(info)
+        info["action_index"] = action_index
+        if 0 <= action_index < len(self.action_meanings):
+            info["action_name"] = self.action_meanings[action_index]
+        else:
+            info["action_name"] = str(action_index)
+        return observation, reward, terminated, truncated, info
+
+
 def make_training_env(
     rom_path: Path,
     *,
@@ -141,6 +175,15 @@ def make_training_env(
     frame_stack: int = 4,
     max_episode_steps: int = 18_000,
     stuck_timeout_steps: int = 900,
+    progress_reward_scale: float = 0.1,
+    progress_reward_mode: str = "raw",
+    progress_bucket_size: int = 32,
+    progress_reward_per_bucket: float = 0.5,
+    progress_reward_start_x: int = 0,
+    score_reward_scale: float = 0.001,
+    terminate_on_life_loss: bool = True,
+    life_loss_penalty: float = -100.0,
+    game_over_penalty: float = 0.0,
     stable_retro_game: str = "Contra-Nes",
     stable_retro_state: str = "Level1",
     stable_retro_scenario: str | None = None,
@@ -155,6 +198,15 @@ def make_training_env(
             render_mode=None,
             max_episode_steps=max_episode_steps,
             stuck_timeout_steps=stuck_timeout_steps,
+            progress_reward_scale=progress_reward_scale,
+            progress_reward_mode=progress_reward_mode,
+            progress_bucket_size=progress_bucket_size,
+            progress_reward_per_bucket=progress_reward_per_bucket,
+            progress_reward_start_x=progress_reward_start_x,
+            score_reward_scale=score_reward_scale,
+            terminate_on_life_loss=terminate_on_life_loss,
+            life_loss_penalty=life_loss_penalty,
+            game_over_penalty=game_over_penalty,
         )
     elif backend == "stable-retro":
         env = make_stable_retro_contra_env(
@@ -167,12 +219,19 @@ def make_training_env(
             render_mode="rgb_array",
             max_episode_steps=max_episode_steps,
             stuck_timeout_steps=stuck_timeout_steps,
+            progress_reward_scale=progress_reward_scale,
+            progress_reward_mode=progress_reward_mode,
+            progress_bucket_size=progress_bucket_size,
+            progress_reward_per_bucket=progress_reward_per_bucket,
+            progress_reward_start_x=progress_reward_start_x,
+            score_reward_scale=score_reward_scale,
         )
     else:
         raise ValueError("backend must be one of: nes-py, stable-retro")
     env = FrameSkip(env, skip=frame_skip)
     env = ResizeAndGrayscale(env, size=screen_size, grayscale=grayscale)
     env = ChannelFirstFrameStack(env, stack_size=frame_stack)
+    env = ActionInfoWrapper(env)
     return env
 
 

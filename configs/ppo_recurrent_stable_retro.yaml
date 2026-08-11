@@ -1,5 +1,5 @@
-algorithm: PPO
-policy: CnnPolicy
+algorithm: RecurrentPPO
+policy: CnnLstmPolicy
 device: cuda
 seed: 42
 
@@ -35,12 +35,12 @@ training:
   gamma: 0.99
   gae_lambda: 0.95
   clip_range: 0.1
-  ent_coef: 0.01
+  ent_coef: 0.02
   vf_coef: 0.5
   max_grad_norm: 0.5
 
 logging:
-  run_name: ppo_stable_retro
+  run_name: ppo_recurrent_stable_retro
   metrics_log_freq: 1000
   checkpoint_freq: 100000
   eval_freq: 50000

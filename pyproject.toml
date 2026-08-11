@@ -34,6 +34,9 @@ nes-py = [
 recurrent = [
   "sb3-contrib>=2.7",
 ]
+manual = [
+  "pygame>=2.6",
+]
 stable-retro = [
   "stable-retro>=1.0",
 ]

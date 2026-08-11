@@ -1,17 +1,24 @@
-algorithm: PPO
-policy: CnnPolicy
+algorithm: RecurrentPPO
+policy: CnnLstmPolicy
 device: cuda
 seed: 42
+
+policy_kwargs:
+  features_extractor_class: ContraCNN
+  features_extractor_kwargs:
+    features_dim: 512
+  lstm_hidden_size: 512
+  n_lstm_layers: 1
 
 env:
   backend: stable-retro
   stable_retro_game: Contra-Nes
   stable_retro_state: Level1
-  stable_retro_scenario:
+  stable_retro_scenario: scenario_game_over
   stable_retro_info:
   stable_retro_integration_path: integrations
   vec_env_start_method: forkserver
-  action_set: CONTRA_BASIC
+  action_set: CONTRA_FULL
   frame_skip: 4
   grayscale: true
   screen_size: 84
@@ -24,23 +31,27 @@ env:
   progress_bucket_size: 32
   progress_reward_per_bucket: 0.5
   progress_reward_start_x: 128
-  score_reward_scale: 0.01
+  score_reward_scale: 0.1
+  terminate_on_life_loss: false
+  life_loss_penalty: -5.0
+  game_over_penalty: -95.0
 
 training:
   total_timesteps: 5000000
-  n_steps: 128
+  n_steps: 256
   batch_size: 256
   n_epochs: 4
-  learning_rate: 0.00025
-  gamma: 0.99
-  gae_lambda: 0.95
+  learning_rate: 0.0002
+  gamma: 0.995
+  gae_lambda: 0.97
   clip_range: 0.1
-  ent_coef: 0.01
+  target_kl: 0.02
+  ent_coef: 0.02
   vf_coef: 0.5
   max_grad_norm: 0.5
 
 logging:
-  run_name: ppo_stable_retro
+  run_name: ppo_recurrent_stable_retro_full
   metrics_log_freq: 1000
   checkpoint_freq: 100000
   eval_freq: 50000

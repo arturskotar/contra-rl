@@ -103,6 +103,25 @@ Once `retro-status` can see `Contra-Nes` and `Level1.state` exists:
 contra-rl train --config .\configs\ppo_stable_retro.yaml --rom .\roms\Contra.nes --total-timesteps 10000 --n-envs 1 --run-name retro_smoke --device cuda
 ```
 
+Recurrent PPO is available through `sb3-contrib`:
+
+```bash
+pip install -e ".[dev,stable-retro,recurrent]"
+```
+
+Use:
+
+```bash
+contra-rl train --config ./configs/ppo_recurrent_stable_retro.yaml --rom ./roms/Contra.nes --total-timesteps 1000000 --n-envs 8 --run-name retro_1m_recurrent_v1 --device cuda
+```
+
+`eval` and `play` carry the LSTM hidden state automatically when the config uses:
+
+```yaml
+algorithm: RecurrentPPO
+policy: CnnLstmPolicy
+```
+
 For multiple environments, Stable Retro must use subprocess vectorization. Its
 native emulator allows only one emulator instance per process. The training code
 therefore uses `SubprocVecEnv` automatically when:
@@ -121,6 +140,40 @@ env:
 ```
 
 If WSL has process startup issues, try `spawn`.
+
+Stuck detection is based on useful events, not movement alone:
+
+```text
+useful event = new max xscroll OR score increase
+```
+
+This prevents the agent from being marked stuck while it pauses to shoot enemies
+and earns score.
+
+The training callback logs action preference metrics:
+
+```text
+actions/right+B_rate
+actions/down+B_rate
+actions/right+up+B_rate
+actions/selected_index
+```
+
+Use these to verify whether the policy actually explores the available Contra
+actions or collapses into plain forward movement.
+
+Progress reward is bucketed in the Stable Retro baseline:
+
+```yaml
+env:
+  progress_reward_mode: bucket
+  progress_bucket_size: 32
+  progress_reward_per_bucket: 0.5
+  progress_reward_start_x: 128
+```
+
+This avoids over-rewarding the safe opening runway where the agent can run right
+before enemies become meaningful.
 
 Then:
 

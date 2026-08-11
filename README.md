@@ -91,6 +91,41 @@ The script creates/uses `.venv-retro-wsl`, checks CUDA, verifies/imports the ROM
 for Stable Retro, starts TensorBoard on `http://localhost:6006`, and runs
 training.
 
+Recurrent PPO/LSTM run:
+
+```bash
+cd /mnt/c/Users/artur/projects/reinfroce/contra-rl
+CONFIG=./configs/ppo_recurrent_stable_retro.yaml \
+TOTAL_TIMESTEPS=1000000 \
+N_ENVS=8 \
+RUN_NAME=retro_1m_recurrent_v1 \
+INSTALL_DEPS=0 \
+bash scripts/train_stable_retro_wsl.sh
+```
+
+Full-control Recurrent PPO experiment (36 directional/A/B combinations and a
+detail-preserving custom CNN):
+
+```bash
+cd /mnt/c/Users/artur/projects/reinfroce/contra-rl
+CONFIG=./configs/ppo_recurrent_stable_retro_full.yaml \
+TOTAL_TIMESTEPS=5000000 \
+N_ENVS=8 \
+RUN_NAME=retro_5m_full_gray_v1 \
+INSTALL_DEPS=0 \
+bash scripts/train_stable_retro_wsl.sh
+```
+
+That full-control configuration uses all available lives in one episode. A
+non-final death costs only `-5` and gameplay continues from the respawn; losing
+the last life adds `-95`, for a total final-death penalty of `-100`. The highest
+horizontal progress remains an episode-wide maximum, so repeated deaths cannot
+farm opening-section progress reward.
+
+`configs/ppo_recurrent_stable_retro_full_rgb.yaml` is the matching RGB
+experiment. It differs only in the observation colour mode, so compare it
+against the grayscale run at equal timesteps and with the same seed.
+
 ## Project status
 
 Gymnasium environment, visual playback, PPO/DQN training, evaluation videos, and

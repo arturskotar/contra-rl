@@ -82,7 +82,7 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 if [ "$INSTALL_DEPS" = "auto" ]; then
-  if python_import_ok stable_retro && python_import_ok torch && python_import_ok stable_baselines3; then
+  if python_import_ok stable_retro && python_import_ok torch && python_import_ok stable_baselines3 && python_import_ok pygame; then
     INSTALL_DEPS=0
   else
     INSTALL_DEPS=1
@@ -94,7 +94,7 @@ if [ "$INSTALL_DEPS" = "1" ]; then
   python -m pip install --upgrade pip setuptools wheel
   log "Installing PyTorch with: $TORCH_INSTALL_COMMAND"
   bash -lc "$TORCH_INSTALL_COMMAND"
-  python -m pip install -e ".[dev,stable-retro]"
+  python -m pip install -e ".[dev,stable-retro,recurrent,manual]"
 fi
 
 log "Checking CUDA"

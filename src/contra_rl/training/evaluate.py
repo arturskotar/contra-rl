@@ -9,10 +9,17 @@ from stable_baselines3 import DQN, PPO
 
 from contra_rl.envs.wrappers import current_rgb_frame, make_training_env
 
+try:
+    from sb3_contrib import RecurrentPPO
+except ImportError:
+    RecurrentPPO = None
+
 ALGORITHMS = {
     "PPO": PPO,
     "DQN": DQN,
 }
+if RecurrentPPO is not None:
+    ALGORITHMS["RECURRENTPPO"] = RecurrentPPO
 
 
 def load_model(checkpoint: Path, algorithm: str, *, device: str = "auto"):
@@ -22,8 +29,18 @@ def load_model(checkpoint: Path, algorithm: str, *, device: str = "auto"):
         model_cls = ALGORITHMS[algorithm]
     except KeyError as exc:
         choices = ", ".join(sorted(ALGORITHMS))
+        if algorithm == "RECURRENTPPO" and RecurrentPPO is None:
+            raise ValueError(
+                "RecurrentPPO requires sb3-contrib. Install with "
+                '`pip install -e ".[recurrent]"` or `pip install sb3-contrib`.'
+            ) from exc
         raise ValueError(f"unsupported algorithm '{algorithm}'. Choose one of: {choices}") from exc
     return model_cls.load(checkpoint, device=device)
+
+
+def is_recurrent_algorithm(config: dict[str, Any]) -> bool:
+    """Return whether the configured algorithm uses recurrent policy state."""
+    return str(config.get("algorithm", "")).upper() == "RECURRENTPPO"
 
 
 def _open_video_writer(path: Path, first_frame: np.ndarray, fps: float):
@@ -60,6 +77,7 @@ def evaluate_model(
     model_device = device or str(config.get("device", "auto"))
 
     model = load_model(checkpoint, algorithm, device=model_device)
+    is_recurrent = is_recurrent_algorithm(config)
     integration_path = env_config.get("stable_retro_integration_path")
     env = make_training_env(
         rom_path,
@@ -71,6 +89,15 @@ def evaluate_model(
         frame_stack=int(env_config.get("frame_stack", 4)),
         max_episode_steps=int(env_config.get("max_episode_steps", 18_000)),
         stuck_timeout_steps=int(env_config.get("stuck_timeout_steps", 900)),
+        progress_reward_scale=float(env_config.get("progress_reward_scale", 0.1)),
+        progress_reward_mode=env_config.get("progress_reward_mode", "raw"),
+        progress_bucket_size=int(env_config.get("progress_bucket_size", 32)),
+        progress_reward_per_bucket=float(env_config.get("progress_reward_per_bucket", 0.5)),
+        progress_reward_start_x=int(env_config.get("progress_reward_start_x", 0)),
+        score_reward_scale=float(env_config.get("score_reward_scale", 0.001)),
+        terminate_on_life_loss=bool(env_config.get("terminate_on_life_loss", True)),
+        life_loss_penalty=float(env_config.get("life_loss_penalty", -100.0)),
+        game_over_penalty=float(env_config.get("game_over_penalty", 0.0)),
         stable_retro_game=env_config.get("stable_retro_game", "Contra-Nes"),
         stable_retro_state=env_config.get("stable_retro_state", "Level1"),
         stable_retro_scenario=env_config.get("stable_retro_scenario"),
@@ -90,6 +117,8 @@ def evaluate_model(
             terminated = False
             truncated = False
             step_count = 0
+            recurrent_state = None
+            episode_start = np.ones((1,), dtype=bool)
 
             if record_path is not None and video_writer is None:
                 first_frame = current_rgb_frame(env)
@@ -99,8 +128,17 @@ def evaluate_model(
 
             for step_index in range(1, max_steps + 1):
                 step_count = step_index
-                action, _ = model.predict(obs, deterministic=deterministic)
+                if is_recurrent:
+                    action, recurrent_state = model.predict(
+                        obs,
+                        state=recurrent_state,
+                        episode_start=episode_start,
+                        deterministic=deterministic,
+                    )
+                else:
+                    action, _ = model.predict(obs, deterministic=deterministic)
                 obs, reward, terminated, truncated, info = env.step(int(action))
+                episode_start = np.array([terminated or truncated], dtype=bool)
                 total_reward += float(reward)
                 max_x = max(max_x, float(info.get("max_x_pos", info.get("x_pos", 0))))
                 final_score = info.get("score", final_score)

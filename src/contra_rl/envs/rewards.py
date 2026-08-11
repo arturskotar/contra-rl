@@ -11,7 +11,16 @@ class RewardParts:
     death: float = 0.0
     time: float = 0.0
     stuck: float = 0.0
+    life_lost: float = 0.0
 
     @property
     def total(self) -> float:
-        return self.progress + self.score + self.weapon + self.death + self.time + self.stuck
+        return (
+            self.progress
+            + self.score
+            + self.weapon
+            + self.death
+            + self.time
+            + self.stuck
+            + self.life_lost
+        )
