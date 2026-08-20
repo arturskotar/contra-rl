@@ -9,6 +9,12 @@ The original backend was `nes-py`. Because it can hit native emulator errors
 under repeated Contra training resets, the project now supports a second backend:
 `stable-retro`.
 
+## Demo
+
+Short deterministic evaluation from the full-control Recurrent PPO agent:
+
+![Contra RL agent gameplay](docs/assets/contra-agent-demo.gif)
+
 ## Recommended local setup
 
 - Python: 3.13
