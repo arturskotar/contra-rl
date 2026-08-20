@@ -98,6 +98,17 @@ def evaluate_model(
         terminate_on_life_loss=bool(env_config.get("terminate_on_life_loss", True)),
         life_loss_penalty=float(env_config.get("life_loss_penalty", -100.0)),
         game_over_penalty=float(env_config.get("game_over_penalty", 0.0)),
+        terminal_efficiency_penalty_scale=float(
+            env_config.get("terminal_efficiency_penalty_scale", 0.0)
+        ),
+        terminal_efficiency_min_x=int(env_config.get("terminal_efficiency_min_x", 256)),
+        terminal_efficiency_max_penalty=float(
+            env_config.get("terminal_efficiency_max_penalty", 25.0)
+        ),
+        idle_penalty_per_step=float(env_config.get("idle_penalty_per_step", 0.0)),
+        idle_penalty_start_steps=int(env_config.get("idle_penalty_start_steps", 0)),
+        forward_recovery_per_pixel=float(env_config.get("forward_recovery_per_pixel", 0.0)),
+        forward_recovery_debt_cap=float(env_config.get("forward_recovery_debt_cap", 5.0)),
         stable_retro_game=env_config.get("stable_retro_game", "Contra-Nes"),
         stable_retro_state=env_config.get("stable_retro_state", "Level1"),
         stable_retro_scenario=env_config.get("stable_retro_scenario"),

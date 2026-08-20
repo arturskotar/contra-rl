@@ -103,6 +103,21 @@ INSTALL_DEPS=0 \
 bash scripts/train_stable_retro_wsl.sh
 ```
 
+To transfer the move-forward behaviour from a compatible full-control
+checkpoint into the kill-first reward experiment, add `RESUME_CHECKPOINT` and
+use a new run name. The checkpoint must use the same 36 actions, grayscale
+frame stack, and CNN/LSTM architecture.
+
+```bash
+CONFIG=./configs/ppo_recurrent_stable_retro_kills.yaml \
+RESUME_CHECKPOINT=./runs/retro_5m_full_gray_v1/checkpoints/retro_5m_full_gray_v1_5000000_steps.zip \
+TOTAL_TIMESTEPS=5000000 \
+N_ENVS=8 \
+RUN_NAME=retro_5m_kills_from_full_v1 \
+INSTALL_DEPS=0 \
+bash scripts/train_stable_retro_wsl.sh
+```
+
 Full-control Recurrent PPO experiment (36 directional/A/B combinations and a
 detail-preserving custom CNN):
 
@@ -125,6 +140,28 @@ farm opening-section progress reward.
 `configs/ppo_recurrent_stable_retro_full_rgb.yaml` is the matching RGB
 experiment. It differs only in the observation colour mode, so compare it
 against the grayscale run at equal timesteps and with the same seed.
+
+Kill-first reward ablation: score is the only positive signal. It removes all
+direct movement reward and adds an end-of-episode efficiency penalty:
+`-5 * episode_steps / max(max_x, 256)`, capped at `-25`.
+After 120 emulator frames without a new maximum X position or score event, it
+also applies `-0.01` every emulator frame, making inactivity more costly than
+a non-final death well before the stuck truncation.
+
+The long-combat config also carries idle penalties as a capped debt. It refunds
+up to `0.01` per pixel only when the agent sets a new episode maximum X; it does
+not reward movement inside already explored ground or create a net-positive
+movement bonus.
+
+```bash
+cd /mnt/c/Users/artur/projects/reinfroce/contra-rl
+CONFIG=./configs/ppo_recurrent_stable_retro_kills.yaml \
+TOTAL_TIMESTEPS=5000000 \
+N_ENVS=8 \
+RUN_NAME=retro_5m_kills_v1 \
+INSTALL_DEPS=0 \
+bash scripts/train_stable_retro_wsl.sh
+```
 
 ## Project status
 

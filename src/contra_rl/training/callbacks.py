@@ -39,6 +39,7 @@ class ContraMetricsCallback(BaseCallback):
             "episode_steps",
             "steps_since_progress",
             "steps_since_useful_event",
+            "idle_debt",
         ]
         for key in scalar_keys:
             value = info.get(key)

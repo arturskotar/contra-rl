@@ -475,6 +475,19 @@ def play(
             terminate_on_life_loss=bool(env_config.get("terminate_on_life_loss", True)),
             life_loss_penalty=float(env_config.get("life_loss_penalty", -100.0)),
             game_over_penalty=float(env_config.get("game_over_penalty", 0.0)),
+            terminal_efficiency_penalty_scale=float(
+                env_config.get("terminal_efficiency_penalty_scale", 0.0)
+            ),
+            terminal_efficiency_min_x=int(env_config.get("terminal_efficiency_min_x", 256)),
+            terminal_efficiency_max_penalty=float(
+                env_config.get("terminal_efficiency_max_penalty", 25.0)
+            ),
+            idle_penalty_per_step=float(env_config.get("idle_penalty_per_step", 0.0)),
+            idle_penalty_start_steps=int(env_config.get("idle_penalty_start_steps", 0)),
+            forward_recovery_per_pixel=float(
+                env_config.get("forward_recovery_per_pixel", 0.0)
+            ),
+            forward_recovery_debt_cap=float(env_config.get("forward_recovery_debt_cap", 5.0)),
             stable_retro_game=env_config.get("stable_retro_game", "Contra-Nes"),
             stable_retro_state=env_config.get("stable_retro_state", "Level1"),
             stable_retro_scenario=env_config.get("stable_retro_scenario"),
@@ -769,6 +782,19 @@ def manual(
             terminate_on_life_loss=bool(env_config.get("terminate_on_life_loss", True)),
             life_loss_penalty=float(env_config.get("life_loss_penalty", -100.0)),
             game_over_penalty=float(env_config.get("game_over_penalty", 0.0)),
+            terminal_efficiency_penalty_scale=float(
+                env_config.get("terminal_efficiency_penalty_scale", 0.0)
+            ),
+            terminal_efficiency_min_x=int(env_config.get("terminal_efficiency_min_x", 256)),
+            terminal_efficiency_max_penalty=float(
+                env_config.get("terminal_efficiency_max_penalty", 25.0)
+            ),
+            idle_penalty_per_step=float(env_config.get("idle_penalty_per_step", 0.0)),
+            idle_penalty_start_steps=int(env_config.get("idle_penalty_start_steps", 0)),
+            forward_recovery_per_pixel=float(
+                env_config.get("forward_recovery_per_pixel", 0.0)
+            ),
+            forward_recovery_debt_cap=float(env_config.get("forward_recovery_debt_cap", 5.0)),
         )
         pygame = _import_pygame()
         console.print(f"[cyan]ROM:[/cyan] {resolved_rom}")
@@ -904,6 +930,19 @@ def check_env(
             terminate_on_life_loss=bool(env_config.get("terminate_on_life_loss", True)),
             life_loss_penalty=float(env_config.get("life_loss_penalty", -100.0)),
             game_over_penalty=float(env_config.get("game_over_penalty", 0.0)),
+            terminal_efficiency_penalty_scale=float(
+                env_config.get("terminal_efficiency_penalty_scale", 0.0)
+            ),
+            terminal_efficiency_min_x=int(env_config.get("terminal_efficiency_min_x", 256)),
+            terminal_efficiency_max_penalty=float(
+                env_config.get("terminal_efficiency_max_penalty", 25.0)
+            ),
+            idle_penalty_per_step=float(env_config.get("idle_penalty_per_step", 0.0)),
+            idle_penalty_start_steps=int(env_config.get("idle_penalty_start_steps", 0)),
+            forward_recovery_per_pixel=float(
+                env_config.get("forward_recovery_per_pixel", 0.0)
+            ),
+            forward_recovery_debt_cap=float(env_config.get("forward_recovery_debt_cap", 5.0)),
             stable_retro_game=env_config.get("stable_retro_game", "Contra-Nes"),
             stable_retro_state=env_config.get("stable_retro_state", "Level1"),
             stable_retro_scenario=env_config.get("stable_retro_scenario"),
@@ -1048,6 +1087,12 @@ def train(
         int | None,
         typer.Option(min=1, help="Override Contra metrics log frequency."),
     ] = None,
+    resume_checkpoint: Annotated[
+        Path | None,
+        typer.Option(
+            help="Compatible PPO/RecurrentPPO checkpoint to continue training from."
+        ),
+    ] = None,
 ) -> None:
     """Train an agent."""
     try:
@@ -1075,9 +1120,16 @@ def train(
         console.print(f"[cyan]Device:[/cyan] {training_config.get('device')}")
         console.print(f"[cyan]Parallel envs:[/cyan] {env_config.get('n_envs')}")
         console.print(f"[cyan]Total timesteps:[/cyan] {train_config.get('total_timesteps')}")
+        if resume_checkpoint is not None:
+            resolved_resume = resume_checkpoint.expanduser().resolve()
+            console.print(f"[cyan]Resume checkpoint:[/cyan] {resolved_resume}")
         console.print("[cyan]Starting training...[/cyan]")
 
-        result = train_model(resolved_rom, training_config)
+        result = train_model(
+            resolved_rom,
+            training_config,
+            resume_checkpoint=resume_checkpoint,
+        )
         console.print("[green]Training finished.[/green]")
         console.print(f"run_dir={result['run_dir']}")
         console.print(f"final_model={result['final_model_path']}")

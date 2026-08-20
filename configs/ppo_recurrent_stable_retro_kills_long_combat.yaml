@@ -1,0 +1,74 @@
+algorithm: RecurrentPPO
+policy: CnnLstmPolicy
+device: cuda
+seed: 42
+
+policy_kwargs:
+  features_extractor_class: ContraCNN
+  features_extractor_kwargs:
+    features_dim: 512
+  lstm_hidden_size: 512
+  n_lstm_layers: 1
+
+env:
+  backend: stable-retro
+  stable_retro_game: Contra-Nes
+  stable_retro_state: Level1
+  stable_retro_scenario: scenario_game_over
+  stable_retro_info:
+  stable_retro_integration_path: integrations
+  vec_env_start_method: forkserver
+  action_set: CONTRA_FULL
+  frame_skip: 4
+  grayscale: true
+  screen_size: 84
+  frame_stack: 4
+  n_envs: 8
+  max_episode_steps: 18000
+
+  # Longer combat window: 1,800 emulator frames (about 7.5 seconds).
+  stuck_timeout_steps: 1800
+
+  # Kill-first: score gain is the only positive signal.
+  progress_reward_mode: bucket
+  progress_reward_scale: 0.0
+  progress_bucket_size: 32
+  progress_reward_per_bucket: 0.0
+  progress_reward_start_x: 128
+  score_reward_scale: 0.15
+
+  terminate_on_life_loss: false
+  life_loss_penalty: -5.0
+  game_over_penalty: -95.0
+
+  terminal_efficiency_penalty_scale: 5.0
+  terminal_efficiency_min_x: 256
+  terminal_efficiency_max_penalty: 25.0
+
+  # Give firing/jumping sequences time to resolve before idle pressure starts.
+  idle_penalty_per_step: -0.003
+  idle_penalty_start_steps: 300
+
+  # Refund prior idle cost only when a step sets a new episode max X.
+  forward_recovery_per_pixel: 0.01
+  forward_recovery_debt_cap: 5.0
+
+training:
+  total_timesteps: 5000000
+  n_steps: 256
+  batch_size: 256
+  n_epochs: 4
+  learning_rate: 0.0002
+  gamma: 0.995
+  gae_lambda: 0.97
+  clip_range: 0.1
+  target_kl: 0.02
+  ent_coef: 0.02
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+logging:
+  run_name: ppo_recurrent_stable_retro_kills_long_combat
+  metrics_log_freq: 1000
+  checkpoint_freq: 100000
+  eval_freq: 50000

@@ -5,6 +5,7 @@ That makes it a better long-term fit for Contra than replaying the title screen
 or depending on nes-py native backup/restore.
 """
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,13 @@ class StableRetroContraEnv(gym.Wrapper):
         terminate_on_life_loss: bool = True,
         life_loss_penalty: float = -100.0,
         game_over_penalty: float = 0.0,
+        terminal_efficiency_penalty_scale: float = 0.0,
+        terminal_efficiency_min_x: int = 256,
+        terminal_efficiency_max_penalty: float = 25.0,
+        idle_penalty_per_step: float = 0.0,
+        idle_penalty_start_steps: int = 0,
+        forward_recovery_per_pixel: float = 0.0,
+        forward_recovery_debt_cap: float = 5.0,
     ) -> None:
         super().__init__(env)
         self.max_episode_steps = max_episode_steps
@@ -99,6 +107,13 @@ class StableRetroContraEnv(gym.Wrapper):
         self.terminate_on_life_loss = terminate_on_life_loss
         self.life_loss_penalty = life_loss_penalty
         self.game_over_penalty = game_over_penalty
+        self.terminal_efficiency_penalty_scale = terminal_efficiency_penalty_scale
+        self.terminal_efficiency_min_x = terminal_efficiency_min_x
+        self.terminal_efficiency_max_penalty = terminal_efficiency_max_penalty
+        self.idle_penalty_per_step = idle_penalty_per_step
+        self.idle_penalty_start_steps = idle_penalty_start_steps
+        self.forward_recovery_per_pixel = forward_recovery_per_pixel
+        self.forward_recovery_debt_cap = forward_recovery_debt_cap
         self._episode_steps = 0
         self._max_x_position = 0
         self._max_progress_bucket = 0
@@ -107,6 +122,7 @@ class StableRetroContraEnv(gym.Wrapper):
         self._has_lives_baseline = False
         self._last_life_lost = False
         self._steps_since_progress = 0
+        self._idle_debt = 0.0
         self._last_reward_parts = RewardParts()
 
     def reset(self, *, seed=None, options=None):
@@ -128,6 +144,8 @@ class StableRetroContraEnv(gym.Wrapper):
             or self._episode_steps >= self.max_episode_steps
             or self._steps_since_progress >= self.stuck_timeout_steps
         )
+        if terminated or truncated:
+            reward += self._apply_terminal_efficiency_penalty()
         return obs, reward, terminated, truncated, self._with_contra_info(info)
 
     def get_rgb_frame(self) -> np.ndarray:
@@ -148,6 +166,7 @@ class StableRetroContraEnv(gym.Wrapper):
         self._has_lives_baseline = self._previous_lives > 0
         self._last_life_lost = False
         self._steps_since_progress = 0
+        self._idle_debt = 0.0
         self._last_reward_parts = RewardParts()
 
     def _x_position(self, info: dict[str, Any]) -> int:
@@ -238,6 +257,12 @@ class StableRetroContraEnv(gym.Wrapper):
         self._previous_lives = current_lives
 
         stuck_penalty = -1.0 if self._steps_since_progress >= self.stuck_timeout_steps else 0.0
+        idle_penalty = self._idle_penalty()
+        self._idle_debt = min(
+            self.forward_recovery_debt_cap,
+            self._idle_debt + abs(idle_penalty),
+        )
+        forward_recovery = self._recover_idle_debt(progress_delta)
         parts = RewardParts(
             progress=self._progress_reward(progress_delta, x_position),
             score=score_delta * self.score_reward_scale,
@@ -245,6 +270,8 @@ class StableRetroContraEnv(gym.Wrapper):
             life_lost=life_lost_penalty,
             time=-0.001,
             stuck=stuck_penalty,
+            idle=idle_penalty,
+            forward_recovery=forward_recovery,
         )
         self._last_reward_parts = parts
         return parts.total
@@ -265,6 +292,46 @@ class StableRetroContraEnv(gym.Wrapper):
             return bucket_delta * self.progress_reward_per_bucket
         raise ValueError("progress_reward_mode must be one of: raw, bucket")
 
+    def _idle_penalty(self) -> float:
+        """Apply a dense penalty before an inactive episode reaches truncation."""
+        if self.idle_penalty_per_step > 0:
+            raise ValueError("idle_penalty_per_step must be <= 0")
+        if self.idle_penalty_start_steps < 0:
+            raise ValueError("idle_penalty_start_steps must be >= 0")
+        if self._steps_since_progress < self.idle_penalty_start_steps:
+            return 0.0
+        return self.idle_penalty_per_step
+
+    def _recover_idle_debt(self, progress_delta: int) -> float:
+        """Refund prior idle cost only when the agent establishes a new max X."""
+        if self.forward_recovery_per_pixel < 0:
+            raise ValueError("forward_recovery_per_pixel must be >= 0")
+        if self.forward_recovery_debt_cap < 0:
+            raise ValueError("forward_recovery_debt_cap must be >= 0")
+        if progress_delta <= 0 or self._idle_debt <= 0:
+            return 0.0
+
+        recovery = min(self._idle_debt, progress_delta * self.forward_recovery_per_pixel)
+        self._idle_debt -= recovery
+        return recovery
+
+    def _apply_terminal_efficiency_penalty(self) -> float:
+        """Penalize slow, short episodes once without rewarding raw movement."""
+        if self.terminal_efficiency_penalty_scale <= 0:
+            return 0.0
+        if self.terminal_efficiency_min_x <= 0:
+            raise ValueError("terminal_efficiency_min_x must be > 0")
+        if self.terminal_efficiency_max_penalty < 0:
+            raise ValueError("terminal_efficiency_max_penalty must be >= 0")
+
+        distance = max(self._max_x_position, self.terminal_efficiency_min_x)
+        penalty = -min(
+            self.terminal_efficiency_max_penalty,
+            self.terminal_efficiency_penalty_scale * self._episode_steps / distance,
+        )
+        self._last_reward_parts = replace(self._last_reward_parts, efficiency=penalty)
+        return penalty
+
     def _with_contra_info(self, info: dict[str, Any]) -> dict[str, Any]:
         contra_info = dict(info)
         contra_info.update(
@@ -281,6 +348,7 @@ class StableRetroContraEnv(gym.Wrapper):
                 "episode_steps": self._episode_steps,
                 "steps_since_progress": self._steps_since_progress,
                 "steps_since_useful_event": self._steps_since_progress,
+                "idle_debt": self._idle_debt,
                 "reward_parts": {
                     "progress": self._last_reward_parts.progress,
                     "score": self._last_reward_parts.score,
@@ -289,6 +357,9 @@ class StableRetroContraEnv(gym.Wrapper):
                     "life_lost": self._last_reward_parts.life_lost,
                     "time": self._last_reward_parts.time,
                     "stuck": self._last_reward_parts.stuck,
+                    "efficiency": self._last_reward_parts.efficiency,
+                    "idle": self._last_reward_parts.idle,
+                    "forward_recovery": self._last_reward_parts.forward_recovery,
                 },
             }
         )
@@ -315,6 +386,13 @@ def make_stable_retro_contra_env(
     terminate_on_life_loss: bool = True,
     life_loss_penalty: float = -100.0,
     game_over_penalty: float = 0.0,
+    terminal_efficiency_penalty_scale: float = 0.0,
+    terminal_efficiency_min_x: int = 256,
+    terminal_efficiency_max_penalty: float = 25.0,
+    idle_penalty_per_step: float = 0.0,
+    idle_penalty_start_steps: int = 0,
+    forward_recovery_per_pixel: float = 0.0,
+    forward_recovery_debt_cap: float = 5.0,
 ):
     """Create a Stable Retro Contra environment from an imported integration."""
     retro = _import_stable_retro()
@@ -348,4 +426,11 @@ def make_stable_retro_contra_env(
         terminate_on_life_loss=terminate_on_life_loss,
         life_loss_penalty=life_loss_penalty,
         game_over_penalty=game_over_penalty,
+        terminal_efficiency_penalty_scale=terminal_efficiency_penalty_scale,
+        terminal_efficiency_min_x=terminal_efficiency_min_x,
+        terminal_efficiency_max_penalty=terminal_efficiency_max_penalty,
+        idle_penalty_per_step=idle_penalty_per_step,
+        idle_penalty_start_steps=idle_penalty_start_steps,
+        forward_recovery_per_pixel=forward_recovery_per_pixel,
+        forward_recovery_debt_cap=forward_recovery_debt_cap,
     )

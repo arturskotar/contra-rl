@@ -184,6 +184,13 @@ def make_training_env(
     terminate_on_life_loss: bool = True,
     life_loss_penalty: float = -100.0,
     game_over_penalty: float = 0.0,
+    terminal_efficiency_penalty_scale: float = 0.0,
+    terminal_efficiency_min_x: int = 256,
+    terminal_efficiency_max_penalty: float = 25.0,
+    idle_penalty_per_step: float = 0.0,
+    idle_penalty_start_steps: int = 0,
+    forward_recovery_per_pixel: float = 0.0,
+    forward_recovery_debt_cap: float = 5.0,
     stable_retro_game: str = "Contra-Nes",
     stable_retro_state: str = "Level1",
     stable_retro_scenario: str | None = None,
@@ -207,6 +214,13 @@ def make_training_env(
             terminate_on_life_loss=terminate_on_life_loss,
             life_loss_penalty=life_loss_penalty,
             game_over_penalty=game_over_penalty,
+            terminal_efficiency_penalty_scale=terminal_efficiency_penalty_scale,
+            terminal_efficiency_min_x=terminal_efficiency_min_x,
+            terminal_efficiency_max_penalty=terminal_efficiency_max_penalty,
+            idle_penalty_per_step=idle_penalty_per_step,
+            idle_penalty_start_steps=idle_penalty_start_steps,
+            forward_recovery_per_pixel=forward_recovery_per_pixel,
+            forward_recovery_debt_cap=forward_recovery_debt_cap,
         )
     elif backend == "stable-retro":
         env = make_stable_retro_contra_env(

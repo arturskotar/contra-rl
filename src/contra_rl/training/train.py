@@ -126,6 +126,23 @@ def make_vector_env(
                 terminate_on_life_loss=bool(env_config.get("terminate_on_life_loss", True)),
                 life_loss_penalty=float(env_config.get("life_loss_penalty", -100.0)),
                 game_over_penalty=float(env_config.get("game_over_penalty", 0.0)),
+                terminal_efficiency_penalty_scale=float(
+                    env_config.get("terminal_efficiency_penalty_scale", 0.0)
+                ),
+                terminal_efficiency_min_x=int(
+                    env_config.get("terminal_efficiency_min_x", 256)
+                ),
+                terminal_efficiency_max_penalty=float(
+                    env_config.get("terminal_efficiency_max_penalty", 25.0)
+                ),
+                idle_penalty_per_step=float(env_config.get("idle_penalty_per_step", 0.0)),
+                idle_penalty_start_steps=int(env_config.get("idle_penalty_start_steps", 0)),
+                forward_recovery_per_pixel=float(
+                    env_config.get("forward_recovery_per_pixel", 0.0)
+                ),
+                forward_recovery_debt_cap=float(
+                    env_config.get("forward_recovery_debt_cap", 5.0)
+                ),
                 stable_retro_game=env_config.get("stable_retro_game", "Contra-Nes"),
                 stable_retro_state=env_config.get("stable_retro_state", "Level1"),
                 stable_retro_scenario=env_config.get("stable_retro_scenario"),
@@ -206,11 +223,59 @@ def _resolve_policy_kwargs(raw_policy_kwargs: Any) -> dict[str, Any]:
     raise ValueError(f"unknown features_extractor_class '{extractor}'")
 
 
+def _resolve_resume_checkpoint(checkpoint: Path) -> Path:
+    """Resolve and validate a checkpoint selected for continued training."""
+    resolved = checkpoint.expanduser().resolve()
+    if not resolved.is_file():
+        raise ValueError(f"resume checkpoint not found: {resolved}")
+    return resolved
+
+
+def _apply_resume_exploration_overrides(model, config: dict[str, Any]) -> None:
+    """Apply exploration settings from the new config to a loaded checkpoint."""
+    training_config = config.get("training", {})
+    if "ent_coef" in training_config:
+        model.ent_coef = float(training_config["ent_coef"])
+
+
+def load_resume_model(
+    checkpoint: Path,
+    config: dict[str, Any],
+    env,
+    *,
+    tensorboard_dir: Path,
+):
+    """Load a compatible SB3 checkpoint and attach the newly configured environment."""
+    resolved_checkpoint = _resolve_resume_checkpoint(checkpoint)
+    algorithm = str(config.get("algorithm", "PPO")).upper()
+    try:
+        model_cls = ALGORITHMS[algorithm]
+    except KeyError as exc:
+        choices = ", ".join(sorted(ALGORITHMS))
+        raise ValueError(f"unsupported algorithm '{algorithm}'. Choose one of: {choices}") from exc
+
+    try:
+        model = model_cls.load(
+            resolved_checkpoint,
+            env=env,
+            device=config.get("device", "auto"),
+            tensorboard_log=str(tensorboard_dir),
+        )
+        _apply_resume_exploration_overrides(model, config)
+        return model
+    except (AssertionError, ValueError) as exc:
+        raise ValueError(
+            "resume checkpoint is incompatible with this environment. The algorithm, "
+            "observation shape, and action count must match."
+        ) from exc
+
+
 def train_model(
     rom_path: Path,
     config: dict[str, Any],
     *,
     run_root: Path = Path("runs"),
+    resume_checkpoint: Path | None = None,
 ):
     """Train an SB3 model and save the final checkpoint."""
     env_config = config.get("env", {})
@@ -236,7 +301,15 @@ def train_model(
         seed=seed,
     )
     try:
-        model = build_model(config, env, tensorboard_dir=tensorboard_dir)
+        if resume_checkpoint is None:
+            model = build_model(config, env, tensorboard_dir=tensorboard_dir)
+        else:
+            model = load_resume_model(
+                resume_checkpoint,
+                config,
+                env,
+                tensorboard_dir=tensorboard_dir,
+            )
         checkpoint_freq = int(logging_config.get("checkpoint_freq", 100_000))
         callbacks = []
         if metrics_log_freq > 0:
@@ -257,6 +330,7 @@ def train_model(
             callback=callbacks or None,
             tb_log_name=run_name,
             progress_bar=True,
+            reset_num_timesteps=resume_checkpoint is None,
         )
 
         final_model_path = run_dir / "final_model.zip"
@@ -268,6 +342,9 @@ def train_model(
             "checkpoint_dir": checkpoint_dir,
             "total_timesteps": total_timesteps,
             "n_envs": n_envs,
+            "resume_checkpoint": _resolve_resume_checkpoint(resume_checkpoint)
+            if resume_checkpoint is not None
+            else None,
         }
     finally:
         env.close()

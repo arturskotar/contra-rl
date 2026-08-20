@@ -13,6 +13,7 @@ TOTAL_TIMESTEPS="${TOTAL_TIMESTEPS:-2000000}"
 N_ENVS="${N_ENVS:-8}"
 DEVICE="${DEVICE:-cuda}"
 METRICS_LOG_FREQ="${METRICS_LOG_FREQ:-1000}"
+RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-}"
 TB_PORT="${TB_PORT:-6006}"
 START_TENSORBOARD="${START_TENSORBOARD:-1}"
 INSTALL_DEPS="${INSTALL_DEPS:-auto}"
@@ -70,6 +71,9 @@ log "ROM: $ROM"
 log "Timesteps: $TOTAL_TIMESTEPS"
 log "Parallel envs: $N_ENVS"
 log "Device: $DEVICE"
+if [ -n "$RESUME_CHECKPOINT" ]; then
+  log "Resume checkpoint: $RESUME_CHECKPOINT"
+fi
 
 if [ ! -f "$ROM" ]; then
   log "Missing ROM: $ROM"
@@ -150,14 +154,19 @@ if [ "$START_TENSORBOARD" = "1" ]; then
 fi
 
 log "Starting training"
-python -m contra_rl.cli train \
-  --config "$CONFIG" \
-  --rom "$ROM" \
-  --total-timesteps "$TOTAL_TIMESTEPS" \
-  --n-envs "$N_ENVS" \
-  --run-name "$RUN_NAME" \
-  --device "$DEVICE" \
+TRAIN_ARGS=(
+  --config "$CONFIG"
+  --rom "$ROM"
+  --total-timesteps "$TOTAL_TIMESTEPS"
+  --n-envs "$N_ENVS"
+  --run-name "$RUN_NAME"
+  --device "$DEVICE"
   --metrics-log-freq "$METRICS_LOG_FREQ"
+)
+if [ -n "$RESUME_CHECKPOINT" ]; then
+  TRAIN_ARGS+=(--resume-checkpoint "$RESUME_CHECKPOINT")
+fi
+python -m contra_rl.cli train "${TRAIN_ARGS[@]}"
 
 log "Training finished"
 log "Run directory: runs/${RUN_NAME}"

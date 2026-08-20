@@ -12,6 +12,9 @@ class RewardParts:
     time: float = 0.0
     stuck: float = 0.0
     life_lost: float = 0.0
+    efficiency: float = 0.0
+    idle: float = 0.0
+    forward_recovery: float = 0.0
 
     @property
     def total(self) -> float:
@@ -23,4 +26,7 @@ class RewardParts:
             + self.time
             + self.stuck
             + self.life_lost
+            + self.efficiency
+            + self.idle
+            + self.forward_recovery
         )
